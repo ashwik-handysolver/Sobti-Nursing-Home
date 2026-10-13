@@ -1,5 +1,12 @@
 import { LanguageMode, MeetingRecording } from '../types/meeting';
+import { CLINIC_PROCEDURES, LEAD_SOURCES } from '../data/clinic';
 import { apiKeyHeaders } from './apiKey';
+import { LEAD_STAGES } from './leads';
+import { LOST_REASONS } from './lostReasons';
+
+// Keeps a value only if it is one of the allowed options
+const pick = <T extends string>(value: unknown, options: readonly T[]): T | undefined =>
+  options.includes(value as T) ? (value as T) : undefined;
 
 // The parts of a recording that come from the AI analysis
 export type AnalysisFields = Pick<
@@ -101,10 +108,17 @@ export function buildAnalysisFields(
           .sort((a: any, b: any) => a.seconds - b.seconds)
       : undefined,
     conversionBarriers: extracted.conversionBarriers || undefined,
+    leadSignals: extracted.leadSignals
+      ? {
+          treatment: pick(extracted.leadSignals.treatment, CLINIC_PROCEDURES),
+          leadSource: pick(extracted.leadSignals.leadSource, LEAD_SOURCES),
+          suggestedStage: pick(extracted.leadSignals.suggestedStage, LEAD_STAGES),
+          lossReason: pick(extracted.leadSignals.lossReason, LOST_REASONS),
+        }
+      : undefined,
     patientGoal: extracted.patientGoal || undefined,
     procedureDiscussed: extracted.procedureDiscussed || undefined,
     patientHesitation: extracted.patientHesitation || undefined,
-    decisionsMade: extracted.decisionsMade || undefined,
     agreedNextSteps: extracted.agreedNextSteps || undefined,
     transcript: extracted.transcript || [],
     summary: extracted.summary || {

@@ -5,15 +5,15 @@ import {
   CalendarCheck,
   ChevronsLeft,
   ChevronsRight,
-  Home,
+  LayoutGrid,
   Moon,
-  Settings,
+  Target,
   Users,
   X,
 } from 'lucide-react';
 import { Logo, SwitchTrack } from './ui';
 
-export type NavigationPage = 'dashboard' | 'recordings' | 'patients' | 'follow-ups' | 'settings';
+export type NavigationPage = 'dashboard' | 'patients' | 'insights' | 'follow-ups' | 'recordings' | 'settings';
 
 interface SidebarProps {
   activePage: NavigationPage;
@@ -39,16 +39,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onToggleCollapsed,
 }) => {
   const navItems: { id: NavigationPage; label: string; icon: React.ElementType; badge?: number }[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: Home },
-    { id: 'recordings', label: 'Recordings', icon: AudioLines },
-    { id: 'patients', label: 'Patients', icon: Users },
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutGrid },
+    { id: 'patients', label: 'Leads', icon: Users },
+    { id: 'insights', label: 'Conversion Insights', icon: Target },
     {
       id: 'follow-ups',
       label: 'Follow-ups',
       icon: CalendarCheck,
       badge: pendingTasksCount > 0 ? pendingTasksCount : undefined,
     },
-    { id: 'settings', label: 'Settings', icon: Settings },
+    { id: 'recordings', label: 'Recordings', icon: AudioLines },
   ];
 
   // Collapsing only applies on desktop; the mobile drawer always shows labels

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Presentation } from 'lucide-react';
 import { PitchAnalysis } from '../../types/meeting';
-import { Card, muted, SectionTitle } from '../ui';
+import { BulletList, Card, ExpandableList, muted, SectionTitle } from '../ui';
 
 const RATING_LABELS: { key: keyof PitchAnalysis['ratings']; label: string }[] = [
   { key: 'rapport', label: 'Rapport' },
@@ -44,7 +44,7 @@ const RatingBars: React.FC<{ pitch: PitchAnalysis }> = ({ pitch }) => (
   </dl>
 );
 
-// Text view: the full review, with what could have been said at each moment.
+// Pitch tab: the full review, with what could have been said at each moment.
 // Read-only: it is the analysis's assessment and is not edited by hand.
 export const PitchReviewCard: React.FC<{
   pitch?: PitchAnalysis;
@@ -52,6 +52,7 @@ export const PitchReviewCard: React.FC<{
 }> = ({ pitch, onJump }) => (
   <Card as="section" className="p-5 space-y-4">
     <SectionTitle icon={Presentation}>Pitch review</SectionTitle>
+
 
     {!pitch ? (
       <p className={muted}>{UNAVAILABLE}</p>
@@ -67,25 +68,13 @@ export const PitchReviewCard: React.FC<{
           <RatingBars pitch={pitch} />
         </div>
 
-        {pitch.strengths.length > 0 && (
-          <div>
-            <h3 className={`${muted} font-medium mb-1.5`}>What worked</h3>
-            <ul className="space-y-1.5 text-sm text-gray-800 dark:text-gray-200">
-              {pitch.strengths.map((item, i) => (
-                <li key={i} className="flex items-start gap-2 leading-snug">
-                  <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-1.5 bg-emerald-500" />
-                  <span>{item}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+        <BulletList title="What worked" items={pitch.strengths} dot="bg-emerald-500" />
 
         {pitch.missedOpportunities.length > 0 && (
           <div>
             <h3 className={`${muted} font-medium mb-2`}>What could have raised the conversion chance</h3>
-            <ul className="space-y-2.5">
-              {pitch.missedOpportunities.map((m, i) => (
+            <ExpandableList items={pitch.missedOpportunities} className="space-y-2.5">
+              {(m, i) => (
                 <li key={i} className="p-3 rounded-lg border border-gray-200 dark:border-gray-700">
                   <p className="text-sm text-gray-700 dark:text-gray-300 leading-snug">
                     {m.timestamp && (
@@ -104,8 +93,8 @@ export const PitchReviewCard: React.FC<{
                     <p className="text-sm text-gray-900 dark:text-gray-100 leading-relaxed">“{m.suggestion}”</p>
                   </div>
                 </li>
-              ))}
-            </ul>
+              )}
+            </ExpandableList>
           </div>
         )}
       </>

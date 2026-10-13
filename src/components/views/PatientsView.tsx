@@ -2,7 +2,9 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { Plus, Users } from 'lucide-react';
 import { ClientLead, MeetingRecording } from '../../types/meeting';
 import { Button, Card, Dropdown, EmptyState, muted, PageHeader, SearchInput } from '../ui';
-import { PatientFormModal, STAGE_OPTIONS } from '../patients/PatientFormModal';
+import { LEAD_FLAGS, LEAD_STAGES } from '../../utils/leads';
+import { suggestLostReason } from '../../utils/lostReasons';
+import { PatientFormModal } from '../patients/PatientFormModal';
 import { PatientProfile } from '../patients/PatientProfile';
 import { PatientsTable, SortDirection, SortField } from '../patients/PatientsTable';
 
@@ -69,7 +71,7 @@ export const PatientsView: React.FC<PatientsViewProps> = ({
   }, [clients, selectedClientId]);
 
   useEffect(() => {
-    document.title = `${selectedClient ? selectedClient.name : 'Patients'} – MeetMind`;
+    document.title = `${selectedClient ? selectedClient.name : 'Leads'} – MeetMind`;
   }, [selectedClient]);
 
   const filteredClients = useMemo(() => {
@@ -84,7 +86,8 @@ export const PatientsView: React.FC<PatientsViewProps> = ({
         client.phone.toLowerCase().includes(q) ||
         (client.email && client.email.toLowerCase().includes(q));
 
-      return matchesSearch && (stageFilter === 'all' || client.stage === stageFilter);
+      // The filter offers stages and flags in one list
+      return matchesSearch && (stageFilter === 'all' || client.stage === stageFilter || client.flag === stageFilter);
     });
   }, [clients, searchQuery, stageFilter]);
 
@@ -149,13 +152,14 @@ export const PatientsView: React.FC<PatientsViewProps> = ({
             onDeleteClient(selectedClient.id);
             handleBackToList();
           }}
+          onUpdate={onUpdateClient}
           onSelectRecording={onSelectRecording}
           onUploadRecording={() => onUploadForClient(selectedClient)}
           onToggleTaskStatus={onToggleTaskStatus}
         />
       ) : (
         <div className="space-y-5">
-          <PageHeader title="Patients">
+          <PageHeader title="Leads">
             <Button onClick={() => setForm({ mode: 'new' })}>
               <Plus className="w-4 h-4" />
               <span>New patient</span>
@@ -177,8 +181,8 @@ export const PatientsView: React.FC<PatientsViewProps> = ({
                     setSearchQuery(e.target.value);
                     setCurrentPage(1);
                   }}
-                  placeholder="Search patients"
-                  aria-label="Search patients"
+                  placeholder="Search leads"
+                  aria-label="Search leads"
                 />
                 <Dropdown
                   value={stageFilter}
@@ -186,7 +190,7 @@ export const PatientsView: React.FC<PatientsViewProps> = ({
                     setStageFilter(stage);
                     setCurrentPage(1);
                   }}
-                  options={[{ value: 'all', label: 'All stages' }, ...STAGE_OPTIONS]}
+                  options={[{ value: 'all', label: 'All stages' }, ...LEAD_STAGES, ...LEAD_FLAGS]}
                   aria-label="Filter by stage"
                   className="sm:w-56"
                 />
@@ -218,6 +222,14 @@ export const PatientsView: React.FC<PatientsViewProps> = ({
       {form.mode !== 'closed' && (
         <PatientFormModal
           client={form.mode === 'edit' ? form.client : null}
+          suggestedLostReason={
+            form.mode === 'edit'
+              ? suggestLostReason(
+                  form.client,
+                  recordings.filter((r) => r.clientId === form.client.id || form.client.recordingIds.includes(r.id))
+                )?.reason
+              : undefined
+          }
           onSave={handleSavePatient}
           onClose={() => setForm({ mode: 'closed' })}
         />

@@ -1,13 +1,23 @@
 import React, { useRef, useState } from 'react';
 import { UploadCloud, Users } from 'lucide-react';
-import { ClientLead, LeadStage } from '../../types/meeting';
-import { CLINIC_DOCTORS, CLINIC_PROCEDURES, DEFAULT_DOCTOR, DEFAULT_PROCEDURE } from '../../data/clinic';
+import { ClientLead, LeadFlag, LeadSource, LeadStage, LostReason, PipelineStage } from '../../types/meeting';
+import { LOST_REASONS } from '../../utils/lostReasons';
+import { LEAD_FLAGS, LEAD_STAGES, PIPELINE_STAGES, isPipelineStage } from '../../utils/leads';
+import { CLINIC_DOCTORS, CLINIC_PROCEDURES, DEFAULT_DOCTOR, DEFAULT_PROCEDURE, LEAD_SOURCES } from '../../data/clinic';
 import { Button, Dropdown, DropdownOption, Field, Modal, TextArea, TextInput } from '../ui';
 
 type Gender = 'Male' | 'Female' | 'Other';
 type UrgencyLevel = 'High' | 'Medium' | 'Low';
 
-export const STAGE_OPTIONS: LeadStage[] = ['New Inquiry', 'Consultation Completed', 'Surgery Scheduled', 'Post-Op Follow-Up'];
+const SOURCE_OPTIONS: DropdownOption<LeadSource | ''>[] = [
+  { value: '', label: 'Not recorded' },
+  ...LEAD_SOURCES.map((source) => ({ value: source, label: source })),
+];
+
+const FLAG_OPTIONS: DropdownOption<LeadFlag | ''>[] = [
+  { value: '', label: 'None' },
+  ...LEAD_FLAGS.map((flag) => ({ value: flag, label: flag })),
+];
 
 const GENDER_OPTIONS: DropdownOption<Gender>[] = [
   { value: 'Male', label: 'M' },
@@ -31,6 +41,10 @@ interface PatientFormData {
   procedureName: string;
   procedureValue: string;
   stage: LeadStage;
+  flag: LeadFlag | '';
+  lostAtStage: PipelineStage;
+  lostReason: LostReason;
+  leadSource: LeadSource | '';
   assignedDoctor: string;
   urgencyLevel: UrgencyLevel;
   notes: string;
@@ -45,7 +59,11 @@ const EMPTY_FORM: PatientFormData = {
   condition: '',
   procedureName: DEFAULT_PROCEDURE,
   procedureValue: '₹65,000',
-  stage: 'New Inquiry',
+  stage: 'New Lead',
+  flag: '',
+  lostAtStage: 'New Lead',
+  lostReason: 'Unknown',
+  leadSource: '',
   assignedDoctor: DEFAULT_DOCTOR,
   urgencyLevel: 'Medium',
   notes: '',
@@ -61,6 +79,10 @@ const toFormData = (client: ClientLead): PatientFormData => ({
   procedureName: client.procedureName,
   procedureValue: client.procedureValue,
   stage: client.stage,
+  flag: client.flag || '',
+  lostAtStage: client.lostAtStage || (isPipelineStage(client.stage) ? client.stage : 'Consultation Completed'),
+  lostReason: client.lostReason || 'Unknown',
+  leadSource: client.leadSource || '',
   assignedDoctor: client.assignedDoctor,
   urgencyLevel: client.urgencyLevel,
   notes: client.notes || '',
@@ -68,16 +90,26 @@ const toFormData = (client: ClientLead): PatientFormData => ({
 
 interface PatientFormModalProps {
   client: ClientLead | null; // null registers a new patient
+  suggestedLostReason?: LostReason; // from the patient's recordings; offered when the lead is marked Lost
   onSave: (client: ClientLead, options: { uploadRecording: boolean }) => void;
   onClose: () => void;
 }
 
-export const PatientFormModal: React.FC<PatientFormModalProps> = ({ client, onSave, onClose }) => {
+export const PatientFormModal: React.FC<PatientFormModalProps> = ({ client, suggestedLostReason, onSave, onClose }) => {
   const [formData, setFormData] = useState<PatientFormData>(() => (client ? toFormData(client) : EMPTY_FORM));
   // Which of the two "save" buttons submitted the new-patient form
   const uploadAfterSaveRef = useRef(false);
 
   const set = (patch: Partial<PatientFormData>) => setFormData((prev) => ({ ...prev, ...patch }));
+
+  // Marking a lead Lost remembers the stage it was at, so drop-off can be reported
+  const setStage = (stage: LeadStage) =>
+    setFormData((prev) => ({
+      ...prev,
+      stage,
+      lostAtStage: stage === 'Lost' && isPipelineStage(prev.stage) ? prev.stage : prev.lostAtStage,
+      lostReason: stage === 'Lost' && prev.stage !== 'Lost' && suggestedLostReason ? suggestedLostReason : prev.lostReason,
+    }));
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -95,6 +127,12 @@ export const PatientFormModal: React.FC<PatientFormModalProps> = ({ client, onSa
       procedureValue: formData.procedureValue,
       numericValue: parseInt(formData.procedureValue.replace(/[^0-9]/g, ''), 10) || 50000,
       stage: formData.stage,
+      // A flag only applies while the lead is still open; the lost-at stage only once it is lost
+      flag: isPipelineStage(formData.stage) ? formData.flag || undefined : undefined,
+      lostAtStage: formData.stage === 'Lost' ? formData.lostAtStage : undefined,
+      lostReason: formData.stage === 'Lost' ? formData.lostReason : undefined,
+      lostDate: formData.stage === 'Lost' ? (client?.stage === 'Lost' && client.lostDate) || today : undefined,
+      leadSource: formData.leadSource || undefined,
       assignedDoctor: formData.assignedDoctor,
       urgencyLevel: formData.urgencyLevel,
       notes: formData.notes,
@@ -202,8 +240,52 @@ export const PatientFormModal: React.FC<PatientFormModalProps> = ({ client, onSa
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Treatment Stage">
-            <Dropdown size="sm" value={formData.stage} onChange={(stage) => set({ stage })} options={STAGE_OPTIONS} />
+          <Field label="Lead Stage">
+            <Dropdown size="sm" value={formData.stage} onChange={setStage} options={LEAD_STAGES} />
+          </Field>
+          {formData.stage === 'Lost' ? (
+            <Field label="Lost at Stage">
+              <Dropdown
+                size="sm"
+                value={formData.lostAtStage}
+                onChange={(lostAtStage) => set({ lostAtStage })}
+                options={PIPELINE_STAGES}
+              />
+            </Field>
+          ) : (
+            isPipelineStage(formData.stage) && (
+              <Field label="Marked As">
+                <Dropdown size="sm" value={formData.flag} onChange={(flag) => set({ flag })} options={FLAG_OPTIONS} />
+              </Field>
+            )
+          )}
+        </div>
+
+        {formData.stage === 'Lost' && (
+          <Field
+            label={
+              suggestedLostReason === formData.lostReason
+                ? 'Reason Lost (suggested from the conversation, please confirm)'
+                : 'Reason Lost'
+            }
+          >
+            <Dropdown
+              size="sm"
+              value={formData.lostReason}
+              onChange={(lostReason) => set({ lostReason })}
+              options={LOST_REASONS}
+            />
+          </Field>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <Field label="Assigned Doctor">
+            <Dropdown
+              size="sm"
+              value={formData.assignedDoctor}
+              onChange={(assignedDoctor) => set({ assignedDoctor })}
+              options={CLINIC_DOCTORS}
+            />
           </Field>
           <Field label="Urgency Level">
             <Dropdown
@@ -213,16 +295,15 @@ export const PatientFormModal: React.FC<PatientFormModalProps> = ({ client, onSa
               options={URGENCY_OPTIONS}
             />
           </Field>
+          <Field label="Lead Source">
+            <Dropdown
+              size="sm"
+              value={formData.leadSource}
+              onChange={(leadSource) => set({ leadSource })}
+              options={SOURCE_OPTIONS}
+            />
+          </Field>
         </div>
-
-        <Field label="Assigned Doctor">
-          <Dropdown
-            size="sm"
-            value={formData.assignedDoctor}
-            onChange={(assignedDoctor) => set({ assignedDoctor })}
-            options={CLINIC_DOCTORS}
-          />
-        </Field>
 
         <Field label="Clinical Notes">
           <TextArea

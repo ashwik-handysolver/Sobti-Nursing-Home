@@ -8,3 +8,6 @@ export * from './Toast';
 export * from './Modal';
 export * from './Popover';
 export * from './Logo';
+export * from './lists';
+export * from './Tabs';
+export * from './charts';

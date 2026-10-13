@@ -36,7 +36,78 @@ ${recording.tasks
   )
   .join('\n\n')}
 
---- EXECUTION PLAN & TIMELINE ---
+${hasPlan(recording) ? txtPlan(recording) : ''}${recording.decisions?.length ? txtDecisions(recording) : ''}--- FULL TRANSCRIPT ---
+${recording.transcript
+  .map((seg) => `[${seg.timestamp}] ${seg.speaker}:\n${seg.text}`)
+  .join('\n\n')}
+`;
+
+  downloadFile(`${sanitizeFilename(recording.title)}_Report.txt`, content, 'text/plain;charset=utf-8');
+}
+
+export function exportMeetingAsMarkdown(recording: MeetingRecording): void {
+  const content = `# MeetMind AI Meeting Report: ${recording.title}
+
+- **Date:** ${recording.uploadDate}
+- **Audio File:** \`${recording.filename}\` (${recording.fileSizeFormatted}, ${recording.durationFormatted})
+- **Detected Language:** ${recording.detectedLanguage}
+
+---
+
+## Executive Summary
+${recording.summary.executiveSummary}
+
+### Quick Skim Highlights
+${recording.summary.quickBulletOverview.map((b) => `- ${b}`).join('\n')}
+
+### Topics Discussed
+${recording.summary.keyTopics
+  .map(
+    (topic) => `#### ${topic.title}
+${topic.summary}
+
+${topic.bullets.map((b) => `- ${b}`).join('\n')}`
+  )
+  .join('\n\n')}
+
+---
+
+## Action Items & Tasks
+
+| # | Task | Owner | Priority | Due Date | Deadline Type | Status | Source |
+|---|------|-------|----------|----------|---------------|--------|--------|
+${recording.tasks
+  .map(
+    (t, idx) =>
+      `| ${idx + 1} | ${t.description} | **${t.owner}** | ${t.priority} | ${
+        t.dueDate
+      } | ${t.isExplicitDeadline ? 'Explicit' : 'Suggested'} | \`${t.status}\` | ${
+        t.sourceRef || 'N/A'
+      } |`
+  )
+  .join('\n')}
+
+---
+
+${hasPlan(recording) ? mdPlan(recording) : ''}${recording.decisions?.length ? mdDecisions(recording) : ''}## Verbatim Transcript
+
+${recording.transcript
+  .map(
+    (s) => `> **[${s.timestamp}] ${s.speaker}**:  
+> ${s.text}`
+  )
+  .join('\n\n')}
+`;
+
+  downloadFile(`${sanitizeFilename(recording.title)}_Report.md`, content, 'text/markdown;charset=utf-8');
+}
+
+// Recordings analyzed before the analysis was narrowed to consultations also carry a plan and a
+// decisions list. They are exported when present and left out otherwise.
+const hasPlan = (recording: MeetingRecording) =>
+  Boolean(recording.plan && (recording.plan.objective || recording.plan.phases?.length || recording.plan.timelineDetails?.length));
+
+const txtPlan = (recording: MeetingRecording) => `--- EXECUTION PLAN & TIMELINE ---
 Objective: ${recording.plan.objective}
 
 Phases:
@@ -59,7 +130,9 @@ ${recording.plan.timelineDetails
   )
   .join('\n')}
 
---- KEY DECISIONS ---
+`;
+
+const txtDecisions = (recording: MeetingRecording) => `--- KEY DECISIONS ---
 ${recording.decisions
   .map(
     (d, idx) =>
@@ -73,60 +146,9 @@ ${recording.decisions
   )
   .join('\n\n')}
 
---- FULL TRANSCRIPT ---
-${recording.transcript
-  .map((seg) => `[${seg.timestamp}] ${seg.speaker}:\n${seg.text}`)
-  .join('\n\n')}
 `;
 
-  downloadFile(`${sanitizeFilename(recording.title)}_Report.txt`, content, 'text/plain;charset=utf-8');
-}
-
-export function exportMeetingAsMarkdown(recording: MeetingRecording): void {
-  const content = `# MeetMind AI Meeting Report: ${recording.title}
-
-- **Date:** ${recording.uploadDate}
-- **Audio File:** \`${recording.filename}\` (${recording.fileSizeFormatted}, ${recording.durationFormatted})
-- **Detected Language:** ${recording.detectedLanguage}
-
----
-
-## 1. Executive Summary
-${recording.summary.executiveSummary}
-
-### Quick Skim Highlights
-${recording.summary.quickBulletOverview.map((b) => `- ${b}`).join('\n')}
-
-### Topics Discussed
-${recording.summary.keyTopics
-  .map(
-    (topic) => `#### ${topic.title}
-${topic.summary}
-
-${topic.bullets.map((b) => `- ${b}`).join('\n')}`
-  )
-  .join('\n\n')}
-
----
-
-## 2. Action Items & Tasks
-
-| # | Task | Owner | Priority | Due Date | Deadline Type | Status | Source |
-|---|------|-------|----------|----------|---------------|--------|--------|
-${recording.tasks
-  .map(
-    (t, idx) =>
-      `| ${idx + 1} | ${t.description} | **${t.owner}** | ${t.priority} | ${
-        t.dueDate
-      } | ${t.isExplicitDeadline ? 'Explicit' : 'Suggested'} | \`${t.status}\` | ${
-        t.sourceRef || 'N/A'
-      } |`
-  )
-  .join('\n')}
-
----
-
-## 3. Execution Plan
+const mdPlan = (recording: MeetingRecording) => `## Execution Plan
 **Objective:** ${recording.plan.objective}
 
 ### Phases & Milestones
@@ -153,7 +175,9 @@ ${recording.plan.risksAndQuestions.map((r) => `- ⚠️ ${r}`).join('\n')}
 
 ---
 
-## 4. Key Decisions
+`;
+
+const mdDecisions = (recording: MeetingRecording) => `## Key Decisions
 
 ${recording.decisions
   .map(
@@ -166,18 +190,7 @@ ${d.pendingApprovals?.length ? `- **Pending Approvals:** ${d.pendingApprovals.jo
 
 ---
 
-## 5. Verbatim Transcript
-
-${recording.transcript
-  .map(
-    (s) => `> **[${s.timestamp}] ${s.speaker}**:  
-> ${s.text}`
-  )
-  .join('\n\n')}
 `;
-
-  downloadFile(`${sanitizeFilename(recording.title)}_Report.md`, content, 'text/markdown;charset=utf-8');
-}
 
 export function exportMeetingAsJson(recording: MeetingRecording): void {
   const jsonStr = JSON.stringify(recording, null, 2);

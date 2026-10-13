@@ -13,12 +13,14 @@ import { PatientsView } from './components/views/PatientsView';
 import { RecordingsListView } from './components/views/RecordingsListView';
 import { FollowUpsView } from './components/views/FollowUpsView';
 import { SettingsView } from './components/views/SettingsView';
+import { InsightsView } from './components/views/InsightsView';
 import { MeetingDetailsView } from './components/views/MeetingDetailsView';
 import { TopNavbar } from './components/TopNavbar';
 import { UploadDialog } from './components/UploadDialog';
 import { Toast, ToastMessage } from './components/ui';
 import { clearRecordingAudio, deleteRecordingAudio, loadRecordingAudio } from './utils/audioStore';
 import { buildAnalysisFields, requestAnalysis } from './utils/analyzeRecording';
+import { normalizeLead, withAnalysis } from './utils/leads';
 
 const STORAGE_KEY_RECORDINGS = 'meetmind_eyecare_recordings_v4';
 const STORAGE_KEY_CLIENTS = 'meetmind_eyecare_clients_v4';
@@ -31,7 +33,8 @@ const TOAST_MS = 6000;
 const PAGE_TITLES: Record<NavigationPage, string> = {
   dashboard: 'Dashboard',
   recordings: 'Recordings',
-  patients: 'Patients',
+  patients: 'Leads',
+  insights: 'Conversion Insights',
   'follow-ups': 'Follow-ups',
   settings: 'Settings',
 };
@@ -114,7 +117,7 @@ export default function App() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].condition) {
-          return parsed;
+          return parsed.map(normalizeLead);
         }
       }
     } catch (e) {
@@ -276,21 +279,17 @@ export default function App() {
   const handleProcessingSuccess = (newRecording: MeetingRecording) => {
     setRecordings((prev) => [newRecording, ...prev]);
 
-    // If linked to client, update client's recordingIds list and conversion chance
+    // The lead picks up the new recording along with its estimate, concerns and next step
     if (newRecording.clientId) {
       setClients((prev) =>
         prev.map((c) =>
           c.id === newRecording.clientId
             ? {
-                ...c,
+                ...withAnalysis(c, newRecording),
                 recordingIds: c.recordingIds.includes(newRecording.id)
                   ? c.recordingIds
                   : [newRecording.id, ...c.recordingIds],
                 lastVisitDate: newRecording.uploadDate.substring(0, 10),
-                conversionChance:
-                  typeof newRecording.estimatedConversionChance === 'number'
-                    ? newRecording.estimatedConversionChance
-                    : c.conversionChance,
               }
             : c
         )
@@ -412,12 +411,8 @@ export default function App() {
       });
 
       setRecordings((prev) => prev.map((r) => (r.id === recordingId ? { ...r, ...fields } : r)));
-      if (previous.clientId && typeof fields.estimatedConversionChance === 'number') {
-        setClients((prev) =>
-          prev.map((c) =>
-            c.id === previous.clientId ? { ...c, conversionChance: fields.estimatedConversionChance! } : c
-          )
-        );
+      if (previous.clientId) {
+        setClients((prev) => prev.map((c) => (c.id === previous.clientId ? withAnalysis(c, fields) : c)));
       }
       showToast('Analysis updated', () =>
         setRecordings((prev) => prev.map((r) => (r.id === recordingId ? { ...previous, audioUrl: r.audioUrl } : r)))
@@ -459,8 +454,12 @@ export default function App() {
   };
 
   const handleUpdateClient = (updatedClient: ClientLead) => {
+    const previous = clients.find((c) => c.id === updatedClient.id);
     setClients((prev) => prev.map((c) => (c.id === updatedClient.id ? updatedClient : c)));
-    showToast('Patient saved');
+    showToast(
+      'Patient saved',
+      previous && (() => setClients((prev) => prev.map((c) => (c.id === previous.id ? previous : c))))
+    );
   };
 
   const handleDeleteClient = (clientId: string) => {
@@ -551,7 +550,6 @@ export default function App() {
                   clients={clients}
                   onSelectRecording={handleSelectRecording}
                   onAddPatient={startNewPatient}
-                  onNavigateToRecordings={() => setActivePage('recordings')}
                   onNavigateToPatients={(clientId?: string) => {
                     if (clientId) {
                       setSelectedPatientIdForView(clientId);
@@ -559,6 +557,7 @@ export default function App() {
                     setActivePage('patients');
                   }}
                   onNavigateToFollowUps={() => setActivePage('follow-ups')}
+                  onNavigateToInsights={() => setActivePage('insights')}
                   onToggleTaskStatus={handleGlobalToggleTaskStatus}
                 />
               )}
@@ -587,6 +586,10 @@ export default function App() {
                   onDeleteClient={handleDeleteClient}
                   onToggleTaskStatus={handleGlobalToggleTaskStatus}
                 />
+              )}
+
+              {activePage === 'insights' && (
+                <InsightsView clients={clients} recordings={recordings} onOpenPatient={handleOpenPatient} />
               )}
 
               {activePage === 'follow-ups' && (

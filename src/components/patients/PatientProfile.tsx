@@ -1,7 +1,10 @@
 import React, { useMemo } from 'react';
 import { ArrowLeft, ArrowRight, AudioLines, CalendarCheck, Edit2, Trash2, UploadCloud } from 'lucide-react';
 import { ClientLead, MeetingRecording } from '../../types/meeting';
+import { suggestLostReason } from '../../utils/lostReasons';
 import { describeDue } from '../../utils/tasks';
+import { LeadLifecycle } from './LeadLifecycle';
+import { LeadSuggestions } from './LeadSuggestions';
 import {
   Avatar,
   Button,
@@ -9,6 +12,7 @@ import {
   ConversionBadge,
   formatRecordingDate,
   IconButton,
+  LeadFlagBadge,
   muted,
   SectionTitle,
   StageBadge,
@@ -21,6 +25,7 @@ interface PatientProfileProps {
   onBack: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onUpdate: (client: ClientLead) => void;
   onSelectRecording: (recordingId: string) => void;
   onUploadRecording: () => void;
   onToggleTaskStatus?: (taskId: string) => void;
@@ -43,6 +48,7 @@ export const PatientProfile: React.FC<PatientProfileProps> = ({
   onBack,
   onEdit,
   onDelete,
+  onUpdate,
   onSelectRecording,
   onUploadRecording,
   onToggleTaskStatus,
@@ -80,7 +86,7 @@ export const PatientProfile: React.FC<PatientProfileProps> = ({
         className="inline-flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 cursor-pointer"
       >
         <ArrowLeft className="w-4 h-4" />
-        <span>Patients</span>
+        <span>Leads</span>
       </button>
 
       <Card className="p-5">
@@ -91,10 +97,17 @@ export const PatientProfile: React.FC<PatientProfileProps> = ({
               <div className="flex items-center gap-2.5 flex-wrap">
                 <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">{client.name}</h1>
                 <StageBadge stage={client.stage} shape="tag" />
+                <LeadFlagBadge flag={client.flag} />
               </div>
               <p className="text-sm text-gray-700 dark:text-gray-300 mt-1">{client.condition}</p>
               <p className={`${muted} mt-1`}>
-                {[client.age ? `${client.age} yrs` : null, client.gender, client.phone, client.email]
+                {[
+                  client.age ? `${client.age} yrs` : null,
+                  client.gender,
+                  client.phone,
+                  client.email,
+                  client.leadSource ? `via ${client.leadSource}` : null,
+                ]
                   .filter(Boolean)
                   .join(' · ')}
               </p>
@@ -173,6 +186,14 @@ export const PatientProfile: React.FC<PatientProfileProps> = ({
           </div>
         )}
       </Card>
+
+      <LeadSuggestions client={client} recordings={clientRecordings} onUpdate={onUpdate} />
+
+      <LeadLifecycle
+        client={client}
+        lostReasonSuggestion={suggestLostReason(client, clientRecordings)}
+        onChange={onUpdate}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
         <Card as="section" className="p-5">

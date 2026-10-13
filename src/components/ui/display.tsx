@@ -1,5 +1,6 @@
 import React from 'react';
-import { LeadStage, TaskPriority } from '../../types/meeting';
+import { Clock, PauseCircle } from 'lucide-react';
+import { LeadFlag, LeadStage, TaskPriority } from '../../types/meeting';
 import { card } from './styles';
 
 // Screen title with an optional subtitle; children sit on the right (actions, progress, …)
@@ -19,13 +20,15 @@ export const PageHeader: React.FC<{
 );
 
 const STAGE_STYLES: Record<string, string> = {
-  'New Inquiry': 'text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/60',
+  'New Lead': 'text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/60',
+  Contacted: 'text-cyan-700 dark:text-cyan-300 bg-cyan-50 dark:bg-cyan-950/40 border-cyan-200 dark:border-cyan-800/60',
+  'Consultation Booked':
+    'text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-800/60',
   'Consultation Completed':
-    'text-cyan-700 dark:text-cyan-300 bg-cyan-50 dark:bg-cyan-950/40 border-cyan-200 dark:border-cyan-800/60',
-  'Surgery Scheduled':
-    'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/60',
-  'Post-Op Follow-Up':
     'text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/40 border-purple-200 dark:border-purple-800/60',
+  Converted:
+    'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/60',
+  Lost: 'text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800/60',
 };
 const STAGE_FALLBACK = 'text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700';
 
@@ -38,6 +41,23 @@ export const StageBadge: React.FC<{ stage: LeadStage; shape?: 'pill' | 'tag' }> 
     {stage}
   </span>
 );
+
+const FLAG_STYLES: Record<LeadFlag, { icon: React.ElementType; className: string }> = {
+  'On Hold': { icon: PauseCircle, className: 'text-gray-600 dark:text-gray-300' },
+  'Follow-up Pending': { icon: Clock, className: 'text-amber-700 dark:text-amber-400' },
+};
+
+// Shows that a lead is on hold or waiting on a follow-up; renders nothing when it is neither
+export const LeadFlagBadge: React.FC<{ flag?: LeadFlag }> = ({ flag }) => {
+  if (!flag) return null;
+  const { icon: Icon, className } = FLAG_STYLES[flag];
+  return (
+    <span className={`inline-flex items-center gap-1 text-xs font-medium whitespace-nowrap ${className}`}>
+      <Icon className="w-3.5 h-3.5" />
+      {flag}
+    </span>
+  );
+};
 
 export const SectionTitle: React.FC<{ icon: React.ElementType; children: React.ReactNode }> = ({
   icon: Icon,

@@ -3,11 +3,12 @@ import {
   ArrowLeft,
   BarChart3,
   CalendarCheck,
-  AlignLeft,
   Download,
   FileText,
+  LayoutDashboard,
   MessageSquare,
   Plus,
+  Presentation,
   RefreshCw,
   TrendingUp,
 } from 'lucide-react';
@@ -21,6 +22,7 @@ import { exportMeetingAsMarkdown, exportMeetingAsTxt, exportMeetingAsJson } from
 import { describeDue } from '../../utils/tasks';
 import {
   Avatar,
+  BulletList,
   Button,
   Card,
   chanceTone,
@@ -29,8 +31,8 @@ import {
   muted,
   SearchInput,
   SectionTitle,
-  SegmentedControl,
-  SegmentOption,
+  TabOption,
+  Tabs,
   TaskRow,
 } from '../ui';
 
@@ -45,10 +47,7 @@ interface MeetingDetailsViewProps {
   initialTranscriptSearch?: string;
 }
 
-const VIEW_OPTIONS: SegmentOption<'text' | 'graph'>[] = [
-  { id: 'text', label: 'Text view', icon: AlignLeft },
-  { id: 'graph', label: 'Graph view', icon: BarChart3 },
-];
+type DetailTab = 'overview' | 'pitch' | 'transcript' | 'graph';
 
 const SPEAKER_STYLES = [
   { name: 'text-blue-600 dark:text-blue-400', border: 'border-blue-500' },
@@ -82,21 +81,6 @@ function findSegmentForExcerpt(excerpt: string | undefined, transcript: Transcri
   return bestScore >= 0.4 ? best : null;
 }
 
-const BulletList: React.FC<{ title: string; items: string[]; dot: string }> = ({ title, items, dot }) =>
-  items.length === 0 ? null : (
-    <div>
-      <h3 className={`${muted} font-medium mb-1.5`}>{title}</h3>
-      <ul className="space-y-1.5 text-sm text-gray-800 dark:text-gray-200">
-        {items.map((item, i) => (
-          <li key={i} className="flex items-start gap-2 leading-snug">
-            <span className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1.5 ${dot}`} />
-            <span>{item}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-
 export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
   recording,
   onBack,
@@ -112,6 +96,7 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
   const [transcriptSearch, setTranscriptSearch] = useState(initialTranscriptSearch);
   const [editingTaskId, setEditingTaskId] = useState<string | 'new' | null>(null);
   const [focusedSegmentId, setFocusedSegmentId] = useState<string | null>(null);
+  const [tab, setTab] = useState<DetailTab>(initialTranscriptSearch ? 'transcript' : 'overview');
 
   // Which part of the analysis is being corrected by hand, and the text typed so far
   const [editing, setEditing] = useState<'header' | 'signals' | 'summary' | null>(null);
@@ -119,26 +104,12 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
   const [editingSegmentId, setEditingSegmentId] = useState<string | null>(null);
   const [segmentDraft, setSegmentDraft] = useState({ speaker: '', text: '', translatedText: '', renameAll: true });
   const setField = (key: string) => (value: string) => setDraft((prev) => ({ ...prev, [key]: value }));
-  const [viewMode, setViewMode] = useState<'text' | 'graph'>(() => {
-    try {
-      return localStorage.getItem('meetmind_recording_view_v1') === 'graph' ? 'graph' : 'text';
-    } catch {
-      return 'text';
-    }
-  });
-
-  const switchView = (mode: 'text' | 'graph') => {
-    setViewMode(mode);
-    try {
-      localStorage.setItem('meetmind_recording_view_v1', mode);
-    } catch {}
-  };
-
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const segmentRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   useEffect(() => {
     setTranscriptSearch(initialTranscriptSearch);
+    if (initialTranscriptSearch) setTab('transcript');
   }, [initialTranscriptSearch, recording.id]);
 
   const handleToggleTask = (taskId: string) => {
@@ -250,7 +221,7 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
     const el = activeSegmentId ? segmentRefs.current[activeSegmentId] : null;
     if (!container || !el) return;
     container.scrollTo({ top: el.offsetTop - container.clientHeight / 3, behavior: 'smooth' });
-  }, [activeSegmentId]);
+  }, [activeSegmentId, tab]);
 
   // A jumped-to line stays highlighted until playback moves on to another one
   useEffect(() => {
@@ -261,6 +232,7 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
 
   const jumpToSegment = (segment: TranscriptSegment) => {
     setTranscriptSearch('');
+    setTab('transcript');
     setFocusedSegmentId(segment.id);
     setCurrentPlaybackTime(segment.startSeconds);
   };
@@ -358,6 +330,14 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
   const completedTasksCount = recording.tasks.filter((t) => t.status === 'Completed').length;
   const summaryText = recording.summary.executiveSummary || recording.patientGoal;
 
+  // Each tab says how much is behind it
+  const tabs: TabOption<DetailTab>[] = [
+    { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+    { id: 'pitch', label: 'Pitch', icon: Presentation, badge: recording.pitchAnalysis?.overallScore },
+    { id: 'transcript', label: 'Transcript', icon: MessageSquare, badge: recording.transcript.length || undefined },
+    { id: 'graph', label: 'Graph', icon: BarChart3 },
+  ];
+
   const exportOptions = [
     { label: 'Markdown', run: exportMeetingAsMarkdown },
     { label: 'Plain text', run: exportMeetingAsTxt },
@@ -367,7 +347,7 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
   return (
     <div className="space-y-4 pb-12">
       {/* Header */}
-      <header className="flex items-start justify-between gap-3">
+      <header className="flex flex-col sm:flex-row sm:items-start justify-between gap-x-3 gap-y-2">
         <div className="flex items-center gap-3 min-w-0">
           <IconButton onClick={onBack} title="Back" aria-label="Back to recordings">
             <ArrowLeft className="w-5 h-5" />
@@ -376,14 +356,14 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
           {editing === 'header' ? (
             <form onSubmit={saveSection} className="flex-1 min-w-0 grid grid-cols-1 sm:grid-cols-[2fr_1fr_auto] gap-2 items-end">
               <TextField label="Title" value={draft.title || ''} onChange={setField('title')} autoFocus />
-              <TextField label="Salesperson" value={draft.salesperson || ''} onChange={setField('salesperson')} />
+              <TextField label="Led by" value={draft.salesperson || ''} onChange={setField('salesperson')} />
               <FormActions onCancel={() => setEditing(null)} />
             </form>
           ) : (
           <div className="min-w-0 self-center">
             <div className="flex items-center gap-1 min-w-0">
-              <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100 truncate">{recording.title}</h1>
-              <EditButton onClick={() => startEdit('header')} label="Edit title and salesperson" />
+              <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100 sm:truncate">{recording.title}</h1>
+              <EditButton onClick={() => startEdit('header')} label="Edit title and who led the consultation" />
             </div>
             <p className={`${muted} mt-0.5`}>
               {recording.clientName &&
@@ -404,14 +384,7 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
           )}
         </div>
 
-        <div className="relative shrink-0 flex items-center gap-2">
-          <SegmentedControl<'text' | 'graph'>
-            value={viewMode}
-            onChange={switchView}
-            options={VIEW_OPTIONS}
-            iconOnlyBelowLg
-            aria-label="View"
-          />
+        <div className="relative shrink-0 self-end sm:self-auto flex items-center gap-2">
           <Button
             variant="ghost"
             onClick={() => onReanalyze(recording.id)}
@@ -424,7 +397,7 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
             }
           >
             <RefreshCw className={`w-4 h-4 ${isReanalyzing ? 'animate-spin' : ''}`} />
-            <span className="hidden lg:inline">{isReanalyzing ? 'Analyzing…' : 'Re-analyze'}</span>
+            <span>{isReanalyzing ? 'Analyzing…' : 'Re-analyze'}</span>
           </Button>
           <Button
             variant="ghost"
@@ -433,7 +406,7 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
             aria-haspopup="true"
           >
             <Download className="w-4 h-4" />
-            <span className="hidden sm:inline">Export</span>
+            <span>Export</span>
           </Button>
           {isExportMenuOpen && (
             <Card className="absolute right-0 top-full mt-1 w-36 py-1 shadow-md z-30">
@@ -461,7 +434,7 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
       )}
 
       {/* Player stays pinned while the page scrolls */}
-      <div className="sticky top-[57px] md:top-0 z-20 -mx-1 px-1 py-2 bg-gray-50 dark:bg-gray-900">
+      <div className="sticky top-[68px] z-20 -mx-1 px-1 py-2 bg-gray-50 dark:bg-gray-900">
         <AudioPlayer
           audioUrl={recording.audioUrl}
           duration={recording.duration}
@@ -470,7 +443,9 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
         />
       </div>
 
-      {viewMode === 'graph' && (
+      <Tabs<DetailTab> value={tab} onChange={setTab} options={tabs} aria-label="Recording sections" />
+
+      {tab === 'graph' && (
         <RecordingGraphView
           recording={recording}
           currentTime={currentPlaybackTime}
@@ -483,7 +458,7 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
         />
       )}
 
-      <div className={`grid grid-cols-1 lg:grid-cols-5 gap-4 items-start ${viewMode === 'graph' ? 'hidden' : ''}`}>
+      <div className={`grid grid-cols-1 lg:grid-cols-5 gap-4 items-start ${tab === 'overview' ? '' : 'hidden'}`}>
         {/* Left: conversion + follow-ups */}
         <div className="lg:col-span-2 space-y-4">
           <Card as="section" className="p-5">
@@ -522,30 +497,25 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
               <div className="mt-5 space-y-4">
                 <BulletList title="In favour" items={positives} dot="bg-emerald-500" />
 
-                {concerns.length > 0 && (
-                  <div>
-                    <h3 className={`${muted} font-medium mb-1.5`}>Concerns</h3>
-                    <ul className="space-y-1.5 text-sm text-gray-800 dark:text-gray-200">
-                      {concerns.map((concern, i) => (
-                        <li key={i} className="flex items-start gap-2 leading-snug">
-                          <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-1.5 bg-amber-500" />
-                          <span>
-                            {concern.text}{' '}
-                            {concern.segment && (
-                              <button
-                                onClick={() => jumpToSegment(concern.segment!)}
-                                className="text-xs tabular-nums font-medium text-blue-600 dark:text-blue-400 hover:underline cursor-pointer whitespace-nowrap"
-                                title="Jump to where this was said"
-                              >
-                                ▸ {concern.segment.timestamp}
-                              </button>
-                            )}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                <BulletList
+                  title="Concerns"
+                  items={concerns}
+                  dot="bg-amber-500"
+                  renderItem={(concern) => (
+                    <>
+                      {concern.text}{' '}
+                      {concern.segment && (
+                        <button
+                          onClick={() => jumpToSegment(concern.segment!)}
+                          className="text-xs tabular-nums font-medium text-blue-600 dark:text-blue-400 hover:underline cursor-pointer whitespace-nowrap"
+                          title="Jump to where this was said"
+                        >
+                          ▸ {concern.segment.timestamp}
+                        </button>
+                      )}
+                    </>
+                  )}
+                />
               </div>
             )}
           </Card>
@@ -600,7 +570,7 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
           </Card>
         </div>
 
-        {/* Right: summary + transcript */}
+        {/* Right: summary */}
         <div className="lg:col-span-3 space-y-4">
           <Card as="section" className="p-5 space-y-4">
             <div className="flex items-center justify-between gap-2">
@@ -609,142 +579,150 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
             </div>
             {editing === 'summary' ? (
               <form onSubmit={saveSection} className="space-y-3">
-                <TextAreaField label="Summary" value={draft.summary || ''} onChange={setField('summary')} rows={5} autoFocus />
+                <TextAreaField label="Summary (used in exports)" value={draft.summary || ''} onChange={setField('summary')} rows={5} autoFocus />
                 <LinesField label="Key points" value={draft.keyPoints || ''} onChange={setField('keyPoints')} />
                 <LinesField label="Next steps" value={draft.nextSteps || ''} onChange={setField('nextSteps')} />
                 <FormActions onCancel={() => setEditing(null)} />
               </form>
             ) : (
               <>
-                {summaryText ? (
-                  <p className="text-sm text-gray-800 dark:text-gray-200 leading-relaxed">{summaryText}</p>
-                ) : (
-                  <p className={muted}>No summary available.</p>
-                )}
+                {keyPoints.length === 0 &&
+                  (summaryText ? (
+                    <p className="text-sm text-gray-800 dark:text-gray-200 leading-relaxed">{summaryText}</p>
+                  ) : (
+                    <p className={muted}>No summary available.</p>
+                  ))}
                 <BulletList title="Key points" items={keyPoints} dot="bg-gray-400" />
                 <BulletList title="Next steps" items={nextSteps} dot="bg-blue-500" />
               </>
             )}
           </Card>
-
-          <PitchReviewCard
-            pitch={recording.pitchAnalysis}
-            onJump={(seconds) => {
-              // Land on the transcript line that was being spoken at that moment
-              const line = [...recording.transcript].reverse().find((seg) => seg.startSeconds <= seconds);
-              if (line) jumpToSegment(line);
-              else setCurrentPlaybackTime(seconds);
-            }}
-          />
-
-          <Card as="section" className="p-5">
-            <div className="flex items-center justify-between gap-3">
-              <SectionTitle icon={MessageSquare}>Transcript</SectionTitle>
-              {recording.transcript.length > 0 && (
-                <SearchInput
-                  value={transcriptSearch}
-                  onChange={(e) => setTranscriptSearch(e.target.value)}
-                  placeholder="Search"
-                  aria-label="Search transcript"
-                  wrapperClassName="w-44 sm:w-56"
-                  className="py-1.5"
-                />
-              )}
-            </div>
-
-            {filteredTranscript.length === 0 ? (
-              <p className={`${muted} mt-3`}>
-                {recording.transcript.length === 0 ? 'No transcript available.' : 'No matches.'}
-              </p>
-            ) : (
-              <div ref={transcriptRef} className="relative mt-3 max-h-[560px] overflow-y-auto pr-1 space-y-1">
-                {filteredTranscript.map((segment) => {
-                  const style = speakerStyles[segment.speaker] || SPEAKER_STYLES[0];
-                  return (
-                    <div
-                      key={segment.id}
-                      ref={(el) => {
-                        segmentRefs.current[segment.id] = el;
-                      }}
-                      className={`group pl-3 pr-2 py-2 border-l-2 rounded-r-md transition-colors ${style.border} ${
-                        segment.id === activeSegmentId ? 'bg-blue-50 dark:bg-blue-500/10' : ''
-                      }`}
-                    >
-                      {editingSegmentId === segment.id ? (
-                        <form onSubmit={saveSegment} className="space-y-2 py-1">
-                          <TextField
-                            label="Speaker"
-                            value={segmentDraft.speaker}
-                            onChange={(speaker) => setSegmentDraft((prev) => ({ ...prev, speaker }))}
-                          />
-                          {segmentDraft.speaker.trim() !== segment.speaker && segmentDraft.speaker.trim() !== '' && (
-                            <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={segmentDraft.renameAll}
-                                onChange={(e) => setSegmentDraft((prev) => ({ ...prev, renameAll: e.target.checked }))}
-                                className="accent-blue-600"
-                              />
-                              Rename “{segment.speaker}” on every line
-                            </label>
-                          )}
-                          <TextAreaField
-                            label="What was said"
-                            value={segmentDraft.text}
-                            onChange={(text) => setSegmentDraft((prev) => ({ ...prev, text }))}
-                            rows={3}
-                            autoFocus
-                          />
-                          <TextAreaField
-                            label="Translation"
-                            value={segmentDraft.translatedText}
-                            onChange={(translatedText) => setSegmentDraft((prev) => ({ ...prev, translatedText }))}
-                            rows={2}
-                          />
-                          <FormActions onCancel={() => setEditingSegmentId(null)} />
-                        </form>
-                      ) : (
-                        <>
-                      <div className="flex items-baseline gap-2 mb-0.5">
-                        <span className={`text-sm font-semibold ${style.name}`}>{segment.speaker}</span>
-                        <button
-                          onClick={() => {
-                            setFocusedSegmentId(segment.id);
-                            setCurrentPlaybackTime(segment.startSeconds);
-                          }}
-                          className="text-xs tabular-nums text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:underline cursor-pointer"
-                          title="Play from here"
-                        >
-                          {segment.timestamp}
-                        </button>
-                        <EditButton
-                          onClick={() => startSegmentEdit(segment)}
-                          label="Edit this line"
-                          className="ml-auto self-center -my-1 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100"
-                        />
-                      </div>
-                      <p
-                        className={`text-sm leading-relaxed ${
-                          segment.isUnclear
-                            ? 'text-gray-500 dark:text-gray-400 italic'
-                            : 'text-gray-700 dark:text-gray-300'
-                        }`}
-                      >
-                        {segment.text}
-                      </p>
-                      {segment.translatedText && (
-                        <p className={`${muted} mt-1 leading-relaxed`}>{segment.translatedText}</p>
-                      )}
-                        </>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
         </div>
       </div>
+
+      {tab === 'pitch' && (
+        <PitchReviewCard
+          pitch={recording.pitchAnalysis}
+          onJump={(seconds) => {
+            // Land on the transcript line that was being spoken at that moment
+            const line = [...recording.transcript].reverse().find((seg) => seg.startSeconds <= seconds);
+            if (line) jumpToSegment(line);
+            else setCurrentPlaybackTime(seconds);
+          }}
+        />
+      )}
+
+      {tab === 'transcript' && (
+        <Card as="section" className="p-5">
+          <div className="flex items-center justify-between gap-3">
+            <SectionTitle icon={MessageSquare}>Transcript</SectionTitle>
+            {recording.transcript.length > 0 && (
+              <SearchInput
+                value={transcriptSearch}
+                onChange={(e) => setTranscriptSearch(e.target.value)}
+                placeholder="Search"
+                aria-label="Search transcript"
+                wrapperClassName="w-44 sm:w-56"
+                className="py-1.5"
+              />
+            )}
+          </div>
+
+          <div className="mt-3">
+
+          {filteredTranscript.length === 0 ? (
+            <p className={muted}>
+              {recording.transcript.length === 0 ? 'No transcript available.' : 'No matches.'}
+            </p>
+          ) : (
+            <div ref={transcriptRef} className="relative max-h-[560px] overflow-y-auto pr-1 space-y-1">
+              {filteredTranscript.map((segment) => {
+                const style = speakerStyles[segment.speaker] || SPEAKER_STYLES[0];
+                return (
+                  <div
+                    key={segment.id}
+                    ref={(el) => {
+                      segmentRefs.current[segment.id] = el;
+                    }}
+                    className={`group pl-3 pr-2 py-2 border-l-2 rounded-r-md transition-colors ${style.border} ${
+                      segment.id === activeSegmentId ? 'bg-blue-50 dark:bg-blue-500/10' : ''
+                    }`}
+                  >
+                    {editingSegmentId === segment.id ? (
+                      <form onSubmit={saveSegment} className="space-y-2 py-1">
+                        <TextField
+                          label="Speaker"
+                          value={segmentDraft.speaker}
+                          onChange={(speaker) => setSegmentDraft((prev) => ({ ...prev, speaker }))}
+                        />
+                        {segmentDraft.speaker.trim() !== segment.speaker && segmentDraft.speaker.trim() !== '' && (
+                          <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={segmentDraft.renameAll}
+                              onChange={(e) => setSegmentDraft((prev) => ({ ...prev, renameAll: e.target.checked }))}
+                              className="accent-blue-600"
+                            />
+                            Rename “{segment.speaker}” on every line
+                          </label>
+                        )}
+                        <TextAreaField
+                          label="What was said"
+                          value={segmentDraft.text}
+                          onChange={(text) => setSegmentDraft((prev) => ({ ...prev, text }))}
+                          rows={3}
+                          autoFocus
+                        />
+                        <TextAreaField
+                          label="Translation"
+                          value={segmentDraft.translatedText}
+                          onChange={(translatedText) => setSegmentDraft((prev) => ({ ...prev, translatedText }))}
+                          rows={2}
+                        />
+                        <FormActions onCancel={() => setEditingSegmentId(null)} />
+                      </form>
+                    ) : (
+                      <>
+                    <div className="flex items-baseline gap-2 mb-0.5">
+                      <span className={`text-sm font-semibold ${style.name}`}>{segment.speaker}</span>
+                      <button
+                        onClick={() => {
+                          setFocusedSegmentId(segment.id);
+                          setCurrentPlaybackTime(segment.startSeconds);
+                        }}
+                        className="text-xs tabular-nums text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:underline cursor-pointer"
+                        title="Play from here"
+                      >
+                        {segment.timestamp}
+                      </button>
+                      <EditButton
+                        onClick={() => startSegmentEdit(segment)}
+                        label="Edit this line"
+                        className="ml-auto self-center -my-1 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100"
+                      />
+                    </div>
+                    <p
+                      className={`text-sm leading-relaxed ${
+                        segment.isUnclear
+                          ? 'text-gray-500 dark:text-gray-400 italic'
+                          : 'text-gray-700 dark:text-gray-300'
+                      }`}
+                    >
+                      {segment.text}
+                    </p>
+                    {segment.translatedText && (
+                      <p className={`${muted} mt-1 leading-relaxed`}>{segment.translatedText}</p>
+                    )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          </div>
+        </Card>
+      )}
     </div>
   );
 };

@@ -1,5 +1,6 @@
 import { GoogleGenAI, FileState, createPartFromUri } from '@google/genai';
 import type { IncomingMessage, ServerResponse } from 'http';
+import { ANALYSIS_SCHEMA } from './analysisSchema.js';
 
 const MODEL = 'gemini-3.8-flash';
 
@@ -10,6 +11,16 @@ function resolveApiKey(req: IncomingMessage): { key?: string; source: 'user' | '
   if (userKey) return { key: userKey, source: 'user' };
   const serverKey = process.env.GEMINI_API_KEY?.trim();
   return serverKey ? { key: serverKey, source: 'server' } : { source: 'none' };
+}
+
+// Used only if Gemini turns the enforced schema down: the same shape, described in the prompt instead
+const SCHEMA_AS_TEXT = `Return one JSON object with exactly this structure. It is given as a schema: the type of each field, its allowed values, and what it should contain.
+${JSON.stringify(ANALYSIS_SCHEMA)}`;
+
+// True when the request failed because of the schema itself rather than the key, quota or audio
+function isSchemaRejection(err: any): boolean {
+  const message = String(err?.message || '');
+  return /INVALID_ARGUMENT|response_?schema|too many states/i.test(message) && !/API key/i.test(message);
 }
 
 const NO_KEY_MESSAGE = 'No Gemini API key is set. Add your key in Settings.';
@@ -168,8 +179,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
           ? 'Language preference is English.'
           : 'Language preference is Automatic detection. Accurately detect if speakers speak English, Hindi, or a mix of Hindi and English (Hinglish). Transcribe pure Hindi phrases in Devanagari script, while keeping English technical terms, brand names, and English clauses in English. Do not force everything into pure English.';
 
-      const systemInstruction = `You are MeetMind AI, an elite multilingual audio meeting intelligence engine.
-Your task is to transcribe audio recordings and extract structured executive insights.
+      const systemInstruction = `You are MeetMind AI, a multilingual assistant that analyzes recorded patient consultations for an eye clinic.
+Your task is to transcribe the recording and extract what the clinic needs to follow up with this patient.
 Supported languages: English, Hindi, and Hinglish (conversations where speakers switch between Hindi and English within the same sentence).
 
 CRITICAL RULES:
@@ -181,10 +192,10 @@ CRITICAL RULES:
 - If a word or name is muffled or uncertain, mark it clearly with "[unclear]" and set isUnclear: true rather than inventing content.
 
 2. SUMMARY:
-- Executive summary of the meeting.
-- Key discussion topics with concise summaries and bullet points.
-- Highlights, challenges faced, and outcomes.
-- Concise bullet-point overview for fast skimming.
+- Executive summary of the consultation in two or three sentences.
+- Key discussion topics with one-sentence summaries and bullet points.
+- Outcomes: what was concluded.
+- Concise bullet-point overview for fast skimming: 3 to 6 points, each under about 15 words.
 - Avoid unsupported conclusions.
 
 3. TASKS & ACTION ITEMS:
@@ -197,31 +208,26 @@ CRITICAL RULES:
 - Set status to "Pending" by default.
 - Include sourceRef pointing to the speaker or timestamp where the task was discussed.
 
-4. PLANNING & EXECUTION:
-- Overarching meeting objective.
-- Phases or milestones with key deliverables.
-- Recommended next steps with owners and suggested target dates.
-- Dependencies and blockers.
-- Timeline items: MUST clearly distinguish between dateType "stated" (explicitly mentioned in the audio) vs dateType "ai-suggested" (recommended by AI). Never claim suggested dates were agreed upon!
-- Risks and unresolved questions.
-
-4b. CONVERSION TIMELINE:
+4. CONVERSION TIMELINE:
 - Track how likely the patient is to go ahead as the conversation unfolds, on the same 0-100 scale as estimatedConversionChance.
 - Give 4 to 12 points in time order: the first at the start of the conversation, then one at each moment the likelihood clearly rose or fell, and the last one equal to estimatedConversionChance.
 - Each point needs the timestamp and seconds of the transcript line that caused the change, and a reason of at most 15 words grounded in what was said. Do not invent swings the audio does not support.
 
-4c. SALES PITCH REVIEW:
-- Review how the salesperson, counselor or doctor handled the conversation, as constructive coaching.
+5. CONSULTATION REVIEW:
+- This is a clinical consultation at an eye clinic, led by a doctor and sometimes a patient counsellor. It is not a sales call. Review how the doctor or counsellor handled the conversation, as constructive coaching from a senior colleague.
+- Judge it on what helps a patient decide well: listening to their complaint, explaining the condition and options clearly, answering fears and questions, being open about cost and insurance, and agreeing a clear next step.
+- Sound clinical judgement is never a weakness. Advising against a procedure, recommending the cheaper option, or telling the patient to wait is not a missed opportunity when the reason is clinical.
 - overallScore is 0-100. Rate rapport, needsDiscovery, objectionHandling, clarity and closing from 1 (poor) to 5 (excellent).
-- summary: two sentences on the overall pitch, covering what carried it and what held it back.
+- summary: two sentences on how the consultation was handled, covering what carried it and what held it back.
 - strengths: 2 to 4 specific things that were done well, each grounded in what was said.
-- missedOpportunities: 1 to 5 moments where a different response would likely have raised the chance of conversion. For each give the timestamp and seconds of the transcript line, whatHappened (what was said or left unaddressed), and suggestion (the words the salesperson could have used instead, written as a direct quote in the language of the conversation).
+- missedOpportunities: 1 to 5 moments where a different response would likely have left the patient better informed, more reassured, or readier to decide. For each give the timestamp and seconds of the transcript line, whatHappened (what was said or left unaddressed), and suggestion (the words the doctor or counsellor could have used instead, written as a direct quote in the language of the conversation and in the voice of whoever was speaking at that moment).
 - Suggestions must be honest and patient-first: never propose pressure tactics, false urgency, or medical claims the conversation does not support.
 
-5. KEY DECISIONS:
-- List confirmed decisions reached during the meeting.
-- Distinguish confirmed decisions from mere proposals or ideas (status: "confirmed" vs "proposal_suggestion").
-- Note context, expected impact, and any pending approvals.
+6. LEAD SIGNALS:
+- treatment: the one clinic service this conversation is mainly about, chosen from the allowed list. Use "Other" if none fits.
+- leadSource: how the patient came to the clinic, only when someone says so (for example "my neighbour had her cataract done here", "I saw your advertisement", "Dr. Gupta referred me"). Otherwise null. Never guess.
+- suggestedStage: where this lead stands at the END of the conversation. "Contacted" = an enquiry or call with no appointment yet. "Consultation Booked" = an appointment was fixed but the examination has not happened. "Consultation Completed" = the patient was examined and treatment was discussed, but they have not committed. "Converted" = the patient agreed and a treatment date was booked. null if unclear.
+- lossReason: if this patient does not go ahead, the single most likely reason, judged from what they said. null if they showed no real hesitation.
 
 Output MUST be strictly valid JSON matching the requested schema. No markdown wrapping outside the JSON.`;
 
@@ -232,122 +238,7 @@ Output MUST be strictly valid JSON matching the requested schema. No markdown wr
 Today's date: ${today} (${now.toLocaleDateString('en-US', { weekday: 'long' })})
 File name: "${filename || 'meeting-audio'}"
 
-Analyze this audio file thoroughly and produce the complete JSON structure:
-{
-  "detectedLanguage": "string (e.g. English, Hindi, or Hinglish - Hindi & English bilingual)",
-  "transcript": [
-    {
-      "id": "t1",
-      "speaker": "Speaker 1 / Name",
-      "timestamp": "00:00",
-      "startSeconds": 0,
-      "text": "Exact verbatim text",
-      "isUnclear": false
-    }
-  ],
-  "summary": {
-    "executiveSummary": "Concise high-level summary",
-    "keyTopics": [
-      {
-        "title": "Topic title",
-        "summary": "Short explanation",
-        "bullets": ["Bullet 1", "Bullet 2"]
-      }
-    ],
-    "highlights": ["Key highlight 1"],
-    "challenges": ["Key challenge 1"],
-    "outcomes": ["Key outcome 1"],
-    "quickBulletOverview": ["Overview point 1", "Overview point 2"]
-  },
-  "tasks": [
-    {
-      "id": "task-1",
-      "description": "Task action item",
-      "owner": "Person name or Unassigned",
-      "priority": "High" | "Medium" | "Low",
-      "dueDate": "Stated date or Not specified",
-      "dueDateISO": "YYYY-MM-DD or null",
-      "isExplicitDeadline": boolean,
-      "status": "Pending",
-      "sourceRef": "Speaker 1 at 00:15"
-    }
-  ],
-  "plan": {
-    "objective": "Primary goal",
-    "phases": [
-      {
-        "phaseName": "Phase 1: Setup",
-        "durationOrPeriod": "Week 1",
-        "milestones": ["Milestone 1"],
-        "keyDeliverables": ["Deliverable 1"]
-      }
-    ],
-    "recommendedNextSteps": [
-      {
-        "step": "Next step description",
-        "owner": "Owner or Unassigned",
-        "suggestedDate": "Date or AI Recommended",
-        "isExplicitDate": boolean
-      }
-    ],
-    "dependenciesAndBlockers": ["Dependency 1"],
-    "timelineDetails": [
-      {
-        "item": "Milestone / Deliverable",
-        "date": "Date string",
-        "dateType": "stated" | "ai-suggested",
-        "context": "Why this date or how derived"
-      }
-    ],
-    "risksAndQuestions": ["Risk 1"]
-  },
-  "decisions": [
-    {
-      "id": "dec-1",
-      "decision": "Decision summary",
-      "context": "Context and background",
-      "status": "confirmed" | "proposal_suggestion",
-      "impact": "Clinical or surgical impact",
-      "pendingApprovals": []
-    }
-  ],
-  "consultationType": "e.g. Cataract Evaluation, LASIK Refractive Consult, Glaucoma Review, Retina Check, Routine Eye Care",
-  "patientName": "Extracted patient name if mentioned, or empty string",
-  "salespersonName": "Extracted salesperson or clinic counselor or doctor who led the conversation",
-  "estimatedConversionChance": 85,
-  "pitchAnalysis": {
-    "overallScore": 75,
-    "summary": "Two sentences on the overall pitch",
-    "ratings": { "rapport": 4, "needsDiscovery": 3, "objectionHandling": 3, "clarity": 4, "closing": 3 },
-    "strengths": ["Specific thing done well"],
-    "missedOpportunities": [
-      { "timestamp": "01:16", "seconds": 76, "whatHappened": "What was said or left unaddressed", "suggestion": "What the salesperson could have said instead" }
-    ]
-  },
-  "conversionTimeline": [
-    { "timestamp": "00:00", "seconds": 0, "score": 55, "reason": "What was said that set or moved the likelihood" }
-  ],
-  "conversionFactors": {
-    "positive": ["Strong patient motivation for clear vision", "Clear financing/EMI options provided"],
-    "negative": ["Concern over 15-day water avoidance", "Waiting for TPA insurance pre-authorization"]
-  },
-  "conversionBarriers": [
-    {
-      "id": "b-1",
-      "category": "Price / Affordability" | "Procedure Hesitation" | "Information Request" | "Unanswered Questions" | "Timing / Availability" | "Unclear Next Step",
-      "description": "Specific barrier explained clearly",
-      "supportingExcerpt": "Exact or near-exact quote from conversation showing this barrier",
-      "isExplicit": true
-    }
-  ],
-  "patientGoal": "Why the patient contacted the clinic or visited",
-  "procedureDiscussed": "Name and details of procedure or service discussed",
-  "patientHesitation": "Key hesitation, fear, or unanswered questions expressed by patient",
-  "decisionsMade": ["Agreed decisions"],
-  "agreedNextSteps": ["Clear next steps agreed during discussion"],
-  "conversionIssues": ["Primary issue or hesitation mentioned in dialogue, e.g. Insurance cashless TPA approval", "Downtime fear"],
-  "conversionNextStep": "Clear concrete follow-up step for sales counselor or ophthalmology coordinator"
-}`;
+Analyze this audio file thoroughly and return the complete JSON object.`;
 
       const audioBuffer = Buffer.from(audioBase64, 'base64');
       if (audioBuffer.length > MAX_AUDIO_BYTES) {
@@ -372,19 +263,29 @@ Analyze this audio file thoroughly and produce the complete JSON structure:
         };
       }
 
-      let response;
-      try {
-        response = await ai.models.generateContent({
+      const analyze = (enforceSchema: boolean) =>
+        ai.models.generateContent({
           model: MODEL,
           contents: {
-            parts: [audioPart, { text: promptText }],
+            parts: [audioPart, { text: enforceSchema ? promptText : `${promptText}\n\n${SCHEMA_AS_TEXT}` }],
           },
           config: {
             systemInstruction,
             responseMimeType: 'application/json',
             temperature: 0.2,
+            ...(enforceSchema ? { responseSchema: ANALYSIS_SCHEMA } : {}),
           },
         });
+
+      let response;
+      try {
+        try {
+          response = await analyze(true);
+        } catch (err) {
+          if (!isSchemaRejection(err)) throw err;
+          console.warn('Gemini rejected the response schema; retrying with it described in the prompt:', err);
+          response = await analyze(false);
+        }
       } finally {
         if (uploadedFileName) {
           ai.files.delete({ name: uploadedFileName }).catch((e) => {

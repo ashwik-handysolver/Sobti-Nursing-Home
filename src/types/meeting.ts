@@ -1,11 +1,36 @@
 export type LanguageMode = 'auto' | 'en' | 'hi' | 'hinglish';
 
-export type LeadStage =
-  | 'New Inquiry'
-  | 'Consultation Completed'
-  | 'Surgery Scheduled'
-  | 'Post-Op Follow-Up'
-  | 'Routine Eye Care';
+// The steps a lead moves through on its way from enquiry to a decision
+export type PipelineStage = 'New Lead' | 'Contacted' | 'Consultation Booked' | 'Consultation Completed';
+
+// Where a lead is now: somewhere in the pipeline, or at one of its two outcomes
+export type LeadStage = PipelineStage | 'Converted' | 'Lost';
+
+// Optional marker for a lead that is paused or waiting on a follow-up, whatever its stage
+export type LeadFlag = 'On Hold' | 'Follow-up Pending';
+
+// How the patient found the clinic
+export type LeadSource =
+  | 'Walk-in'
+  | 'Doctor referral'
+  | 'Friend or family'
+  | 'Google search'
+  | 'Website'
+  | 'Social media'
+  | 'Advertisement'
+  | 'ECHS / insurance panel'
+  | 'Other';
+
+// Why a lost lead did not go ahead, as confirmed by the counsellor
+export type LostReason =
+  | 'Price concerns'
+  | 'Fear of surgery'
+  | 'Chose another clinic'
+  | 'Not ready to proceed'
+  | 'Unsuitable for treatment'
+  | 'Poor follow-up'
+  | 'Scheduling conflicts'
+  | 'Unknown';
 
 export interface ClientLead {
   id: string;
@@ -19,13 +44,19 @@ export interface ClientLead {
   procedureValue: string; // e.g. "₹65,000"
   numericValue: number; // e.g. 65000
   stage: LeadStage;
+  flag?: LeadFlag;
+  lostAtStage?: PipelineStage; // the stage the lead had reached when it was marked Lost
+  lostReason?: LostReason;
+  lostDate?: string; // YYYY-MM-DD, the day it was marked Lost
+  leadSource?: LeadSource;
+  ignoredSuggestions?: string[]; // suggestions from analyzed recordings that were dismissed
   assignedDoctor: string;
   createdDate: string;
   lastVisitDate: string;
   notes: string;
   recordingIds: string[]; // array of MeetingRecording ids
 
-  // Sales & Medical Counselor Conversion Intelligence
+  // Conversion intelligence from the consultation
   conversionChance: number; // 0 to 100%
   conversionIssues: string[]; // e.g. ["Insurance cashless query for premium Toric lens", "Fear of pain / postoperative downtime"]
   conversionNextStep: string; // e.g. "Provide TPA pre-authorization form and offer 0% EMI plan"
@@ -153,10 +184,10 @@ export interface PitchMissedOpportunity {
   seconds: number;
   timestamp: string;
   whatHappened: string;
-  suggestion: string; // what the salesperson could have said instead
+  suggestion: string; // what the doctor or counsellor could have said instead
 }
 
-// Review of how the salesperson handled the conversation
+// Review of how the doctor or counsellor handled the conversation
 export interface PitchAnalysis {
   overallScore: number; // 0-100
   summary: string;
@@ -174,6 +205,15 @@ export interface PitchAnalysis {
 export interface ConversionFactors {
   positive: string[];
   negative: string[];
+}
+
+// What the analysis reads off a conversation about the lead itself. These are only ever
+// offered as suggestions; the patient record changes when someone applies one.
+export interface LeadSignals {
+  treatment?: string; // one of the clinic's procedures
+  leadSource?: LeadSource; // only when the patient says how they found the clinic
+  suggestedStage?: LeadStage; // where the lead stood at the end of the conversation
+  lossReason?: LostReason; // the most likely reason, should the patient not go ahead
 }
 
 export interface MeetingRecording {
@@ -197,13 +237,14 @@ export interface MeetingRecording {
   audioUrl?: string; // object URL or generated sample tone
   clientId?: string; // linked client / patient id
   clientName?: string; // patient name
-  salespersonName?: string; // counselor or salesperson name
+  salespersonName?: string; // the doctor or counsellor who led the conversation (name kept for saved data)
   consultationType?: string; // e.g. "Cataract Pre-Op", "Refractive Consult", "Glaucoma Follow-Up"
   estimatedConversionChance?: number; // AI calculated conversion % from audio dialogue (0-100)
   conversionFactors?: ConversionFactors;
   pitchAnalysis?: PitchAnalysis;
   conversionTimeline?: ConversionPoint[]; // likelihood across the conversation, in time order
   conversionBarriers?: ConversionBarrier[];
+  leadSignals?: LeadSignals;
   patientGoal?: string; // Why the patient contacted the clinic
   procedureDiscussed?: string; // Procedure or service discussed
   patientHesitation?: string; // Expressed interest or hesitation
