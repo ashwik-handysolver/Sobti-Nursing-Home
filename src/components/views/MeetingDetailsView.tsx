@@ -629,7 +629,6 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
 
           <PitchReviewCard
             pitch={recording.pitchAnalysis}
-            onSave={(pitchAnalysis) => onUpdateRecording(recording.id, { pitchAnalysis })}
             onJump={(seconds) => {
               // Land on the transcript line that was being spoken at that moment
               const line = [...recording.transcript].reverse().find((seg) => seg.startSeconds <= seconds);
