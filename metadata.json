@@ -1,0 +1,8 @@
+{
+  "name": "Remix MeetMind AI",
+  "description": "Transform meeting audio into accurate transcripts, actionable tasks, and strategic plans with support for English and Hindi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
