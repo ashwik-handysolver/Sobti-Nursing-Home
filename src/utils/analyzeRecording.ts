@@ -1,6 +1,5 @@
 import { LanguageMode, MeetingRecording } from '../types/meeting';
 import { CLINIC_PROCEDURES, LEAD_SOURCES } from '../data/clinic';
-import { apiKeyHeaders } from './apiKey';
 import { LEAD_STAGES } from './leads';
 import { LOST_REASONS } from './lostReasons';
 
@@ -32,7 +31,7 @@ export async function requestAnalysis(
 
   const response = await fetch('/api/process-audio', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...apiKeyHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       audioBase64,
       mimeType: options.mimeType || audio.type || 'audio/mp3',
@@ -108,6 +107,10 @@ export function buildAnalysisFields(
           .sort((a: any, b: any) => a.seconds - b.seconds)
       : undefined,
     conversionBarriers: extracted.conversionBarriers || undefined,
+    followUpMessage:
+      typeof extracted.followUpMessage === 'string' && extracted.followUpMessage.trim()
+        ? extracted.followUpMessage.trim()
+        : undefined,
     leadSignals: extracted.leadSignals
       ? {
           treatment: pick(extracted.leadSignals.treatment, CLINIC_PROCEDURES),

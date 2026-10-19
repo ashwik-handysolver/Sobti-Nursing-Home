@@ -1,33 +1,34 @@
 import React, { useMemo } from 'react';
 import {
+  AlertTriangle,
   ArrowRight,
-  BarChart3,
+  BadgeIndianRupee,
   CalendarCheck,
-  ChevronRight,
   Filter,
-  Lightbulb,
-  MessagesSquare,
+  PhoneCall,
+  Scale,
+  Target,
   UserPlus,
   Users,
+  XCircle,
 } from 'lucide-react';
 import { ClientLead, MeetingRecording } from '../../types/meeting';
-import { buildConversionOverview, treatmentOf } from '../../utils/conversion';
-import { LossReasonsCard } from '../insights/LossReasonsCard';
+import { buildConversionOverview, compareTreatments, leadsInPeriod, PERIOD_OPTIONS, PeriodId } from '../../utils/conversion';
+import { formatINR } from '../../utils/format';
+import { usePeriod } from '../../utils/usePeriod';
+import { rankPriorityLeads, STALE_AFTER_DAYS, staleLeads } from '../../utils/priority';
 import { byUrgency, flattenTasks } from '../../utils/tasks';
+import { LossReasonsCard } from '../insights/LossReasonsCard';
+import { PriorityList } from '../dashboard/PriorityList';
 import {
-  Avatar,
   Button,
-  Card,
-  ColumnChart,
-  ConversionBadge,
   EmptyState,
-  formatRecordingDate,
-  FunnelBars,
-  LeadFlagBadge,
+  FunnelSteps,
+  MeterList,
   muted,
   PageHeader,
-  SectionTitle,
-  StageBadge,
+  Panel,
+  SegmentedControl,
   StatTile,
   TaskRow,
 } from '../ui';
@@ -55,82 +56,32 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onNavigateToInsights,
   onToggleTaskStatus,
 }) => {
+  const [period, changePeriod] = usePeriod();
+
+  // The numbers and charts cover leads that came in during the period;
+  // who to call and what is due are always about right now
+  const periodLeads = useMemo(() => leadsInPeriod(clients, period), [clients, period]);
+  const overview = useMemo(() => buildConversionOverview(periodLeads), [periodLeads]);
+  const byTreatment = useMemo(() => compareTreatments(periodLeads).slice(0, 5), [periodLeads]);
+  const priority = useMemo(() => rankPriorityLeads(clients, recordings), [clients, recordings]);
+  const stale = useMemo(() => staleLeads(clients, recordings), [clients, recordings]);
+
   const pendingTasks = useMemo(
-    () =>
-      flattenTasks(recordings, clients)
-        .filter((t) => t.status !== 'Completed')
-        .sort(byUrgency),
+    () => flattenTasks(recordings, clients).filter((t) => t.status !== 'Completed').sort(byUrgency),
     [recordings, clients]
   );
   const overdueCount = pendingTasks.filter((t) => t.urgency === 'overdue').length;
-  const dueTodayCount = pendingTasks.filter((t) => t.urgency === 'today').length;
+  const dueNow = pendingTasks.filter((t) => t.urgency === 'overdue' || t.urgency === 'today');
+  const shownTasks = (dueNow.length > 0 ? dueNow : pendingTasks).slice(0, 5);
 
-  const scored = useMemo(
-    () => recordings.filter((r) => typeof r.estimatedConversionChance === 'number'),
-    [recordings]
-  );
-  const lowConversion = useMemo(
-    () =>
-      scored
-        .filter((r) => r.estimatedConversionChance! < 50)
-        .sort((a, b) => a.estimatedConversionChance! - b.estimatedConversionChance!),
-    [scored]
-  );
-  const overview = useMemo(() => buildConversionOverview(clients), [clients]);
-
-  // Newest leads first; leads added on the same day are ordered by their latest visit
-  const recentLeads = useMemo(
-    () =>
-      [...clients]
-        .sort(
-          (a, b) =>
-            (b.createdDate || '').localeCompare(a.createdDate || '') ||
-            (b.lastVisitDate || '').localeCompare(a.lastVisitDate || '')
-        )
-        .slice(0, 5),
-    [clients]
-  );
-
-  // Most frequent objection category, counted once per conversation
-  const topObjection = useMemo(() => {
-    const counts = new Map<string, number>();
-    recordings.forEach((r) => {
-      new Set((r.conversionBarriers || []).map((b) => b.category)).forEach((category) => {
-        counts.set(category, (counts.get(category) || 0) + 1);
-      });
-    });
-    const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
-    return top ? { category: top[0], count: top[1] } : null;
-  }, [recordings]);
-
-  const nextStep =
-    overdueCount > 0
-      ? { text: `Review ${plural(overdueCount, 'overdue follow-up')}`, run: onNavigateToFollowUps }
-      : dueTodayCount > 0
-      ? { text: `Complete ${plural(dueTodayCount, 'follow-up')} due today`, run: onNavigateToFollowUps }
-      : lowConversion.length > 0
-      ? {
-          text: `Review ${plural(lowConversion.length, 'low-conversion conversation')}`,
-          run: () => onSelectRecording(lowConversion[0].id),
-        }
-      : pendingTasks.length > 0
-      ? { text: `Work through ${plural(pendingTasks.length, 'pending follow-up')}`, run: onNavigateToFollowUps }
-      : { text: 'Add a new patient and upload their recording', run: onAddPatient };
-
-  return (
-    <div className="space-y-6">
-      <PageHeader title="Dashboard" subtitle="How enquiries are converting into procedures.">
-        <Button onClick={onAddPatient} className="shrink-0">
-          <UserPlus className="w-4 h-4" />
-          <span>New patient</span>
-        </Button>
-      </PageHeader>
-
-      {clients.length === 0 && recordings.length === 0 && (
+  if (clients.length === 0 && recordings.length === 0) {
+    return (
+      <div className="space-y-5">
+        <PageHeader title="Dashboard" />
         <EmptyState
           icon={Users}
           title="Add your first patient"
-          hint="Upload their consultation recording as you add them to get a summary, follow-ups, a conversion estimate and the transcript."
+          hint="Add a patient and record or upload their consultation to see who is likely to convert, why leads are lost, and who to call next."
           action={
             <Button onClick={onAddPatient}>
               <UserPlus className="w-4 h-4" />
@@ -138,147 +89,141 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </Button>
           }
         />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5 pb-10">
+      <PageHeader
+        title="Dashboard"
+        className="flex flex-col md:flex-row md:items-center justify-between gap-3"
+      >
+        <div className="flex items-center gap-2 flex-wrap">
+          <SegmentedControl<PeriodId> value={period} onChange={changePeriod} options={PERIOD_OPTIONS} aria-label="Period" />
+          <Button onClick={onAddPatient} className="shrink-0">
+            <UserPlus className="w-4 h-4" />
+            <span>New patient</span>
+          </Button>
+        </div>
+      </PageHeader>
+
+      {/* What needs attention, in one line */}
+      {(stale.length > 0 || overdueCount > 0) && (
+        <div
+          role="status"
+          className="flex flex-col sm:flex-row sm:items-center gap-x-4 gap-y-1.5 px-4 py-3 rounded-xl border border-amber-200 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 text-sm text-gray-800 dark:text-gray-200"
+        >
+          <AlertTriangle className="hidden sm:block w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <p className="flex-1 min-w-0">
+            {stale.length > 0 && (
+              <>
+                <span className="font-semibold">{plural(stale.length, 'open lead')}</span> without contact for{' '}
+                {STALE_AFTER_DAYS}+ days
+                {stale.length <= 3 && (
+                  <>
+                    :{' '}
+                    {stale.map(({ client }, i) => (
+                      <React.Fragment key={client.id}>
+                        {i > 0 && ', '}
+                        <button
+                          onClick={() => onNavigateToPatients(client.id)}
+                          className="underline decoration-amber-400 underline-offset-2 hover:text-amber-800 dark:hover:text-amber-300 cursor-pointer"
+                        >
+                          {client.name}
+                        </button>
+                      </React.Fragment>
+                    ))}
+                  </>
+                )}
+                {overdueCount > 0 && '. '}
+              </>
+            )}
+            {overdueCount > 0 && (
+              <>
+                <span className="font-semibold">{plural(overdueCount, 'follow-up')}</span> overdue.
+              </>
+            )}
+          </p>
+          {overdueCount > 0 && (
+            <Button variant="link" onClick={onNavigateToFollowUps} className="shrink-0 text-amber-800! dark:text-amber-300!">
+              Review follow-ups <ArrowRight className="w-4 h-4" />
+            </Button>
+          )}
+        </div>
       )}
 
-      {(clients.length > 0 || recordings.length > 0) && (
-      <>
-      {/* Conversion health */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Business health for the period */}
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         <StatTile
-          label="Total leads"
-          value={String(overview.totalLeads)}
-          note={overview.newThisMonth > 0 ? `+${overview.newThisMonth} this month` : 'None new this month'}
-          onClick={() => onNavigateToPatients()}
+          label="Open pipeline"
+          icon={BadgeIndianRupee}
+          value={formatINR(overview.pipelineValue)}
+          note={plural(overview.openLeads, 'open lead')}
         />
-        <StatTile label="Converted leads" value={String(overview.converted)} note="Treatment booked" />
+        <StatTile
+          label="Converted"
+          icon={Target}
+          value={String(overview.converted)}
+          note={overview.wonValue ? `${formatINR(overview.wonValue)} booked` : 'Treatment booked'}
+        />
         <StatTile
           label="Conversion rate"
+          icon={Scale}
           value={overview.conversionRate === null ? '—' : `${overview.conversionRate}%`}
           note={`${overview.converted} of ${plural(overview.totalLeads, 'lead')}`}
         />
         <StatTile
-          label="Lost leads"
+          label="Lost"
+          icon={XCircle}
           value={String(overview.lost)}
-          note={
-            overview.lost > 0 ? (
-              <span className="font-medium text-amber-600 dark:text-amber-400">Needs review</span>
-            ) : (
-              'None lost'
-            )
-          }
+          note={overview.lost ? `${formatINR(overview.lostValue)} in treatment value` : 'None lost'}
         />
       </div>
 
-      {overview.totalLeads > 0 && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
-          <Card as="section" className="p-5">
-            <SectionTitle icon={BarChart3}>Leads by treatment</SectionTitle>
-            <ColumnChart items={overview.byTreatment} unit="lead" />
-          </Card>
-          <Card as="section" className="p-5">
-            <SectionTitle icon={Filter}>Conversion funnel</SectionTitle>
-            <FunnelBars steps={overview.funnel} />
-            {(overview.onHold > 0 || overview.followUpPending > 0) && (
-              <p className={`${muted} mt-4`}>
-                {[
-                  overview.onHold > 0 && `${overview.onHold} on hold`,
-                  overview.followUpPending > 0 && `${overview.followUpPending} follow-up pending`,
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </p>
-            )}
-          </Card>
-          <LossReasonsCard
-            overview={overview}
-            action={
-              <Button variant="link" onClick={onNavigateToInsights} className="shrink-0">
-                Insights <ArrowRight className="w-4 h-4" />
-              </Button>
-            }
-          />
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 items-start">
-        {/* Recent leads */}
-        <Card as="section" className="lg:col-span-3 overflow-hidden">
-          <div className="flex items-center justify-between p-5 pb-4">
-            <SectionTitle icon={Users}>Recent leads</SectionTitle>
-            {clients.length > 0 && (
-              <Button variant="link" onClick={() => onNavigateToPatients()}>
-                View all <ArrowRight className="w-4 h-4" />
-              </Button>
-            )}
-          </div>
-
-          {recentLeads.length === 0 ? (
-            <p className={`${muted} px-5 pb-8 text-center`}>No leads yet.</p>
+      {/* Act now */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+        <Panel
+          title="Who to call today"
+          icon={PhoneCall}
+          action={
+            <Button variant="link" onClick={() => onNavigateToPatients()} className="text-sm">
+              All leads <ArrowRight className="w-4 h-4" />
+            </Button>
+          }
+          flush
+          className="xl:col-span-2"
+        >
+          {priority.length === 0 ? (
+            <p className={`${muted} px-5 pb-5`}>No open leads to follow up. New enquiries will appear here.</p>
           ) : (
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-850">
-                  <th className="py-2.5 pl-5 pr-3 font-medium">Lead</th>
-                  <th className="py-2.5 px-3 font-medium">Stage</th>
-                  <th className="py-2.5 px-3 font-medium hidden xl:table-cell">Added</th>
-                  <th className="py-2.5 px-3 font-medium">Conversion</th>
-                  <th className="py-2.5 pr-4" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100 dark:divide-gray-700/70">
-                {recentLeads.map((lead) => (
-                  <tr
-                    key={lead.id}
-                    onClick={() => onNavigateToPatients(lead.id)}
-                    className="hover:bg-gray-50 dark:hover:bg-gray-750/50 transition-colors cursor-pointer"
-                  >
-                    <td className="py-3.5 pl-5 pr-3 w-full max-w-0">
-                      <div className="flex items-center gap-3">
-                        <Avatar name={lead.name} />
-                        <div className="min-w-0">
-                          <div className="font-medium text-gray-900 dark:text-gray-100 truncate">{lead.name}</div>
-                          <div className={`${muted} truncate`}>{treatmentOf(lead)}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-3 whitespace-nowrap">
-                      <div className="flex flex-col items-start gap-1">
-                        <StageBadge stage={lead.stage} />
-                        <LeadFlagBadge flag={lead.flag} />
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-3 whitespace-nowrap hidden xl:table-cell text-gray-600 dark:text-gray-400">
-                      {formatRecordingDate(lead.createdDate).date}
-                    </td>
-                    <td className="py-3.5 px-3 whitespace-nowrap">
-                      <ConversionBadge value={lead.conversionChance} />
-                    </td>
-                    <td className="py-3.5 pr-4 text-blue-600 dark:text-blue-500">
-                      <ChevronRight className="w-4 h-4" />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <PriorityList leads={priority.slice(0, 6)} onOpenPatient={(id) => onNavigateToPatients(id)} />
           )}
-        </Card>
+        </Panel>
 
-        {/* Follow-ups */}
-        <Card as="section" className="lg:col-span-2 p-5">
-          <div className="flex items-center justify-between mb-1">
-            <SectionTitle icon={CalendarCheck}>Follow-ups to review</SectionTitle>
-            {pendingTasks.length > 0 && (
-              <Button variant="link" onClick={onNavigateToFollowUps} className="shrink-0">
-                View all <ArrowRight className="w-4 h-4" />
+        <Panel
+          title={dueNow.length > 0 ? 'Follow-ups due' : 'Upcoming follow-ups'}
+          icon={CalendarCheck}
+          subtitle={
+            dueNow.length > 0
+              ? `${dueNow.length} due today or overdue`
+              : pendingTasks.length > 0
+              ? 'Nothing due today'
+              : undefined
+          }
+          action={
+            pendingTasks.length > 0 && (
+              <Button variant="link" onClick={onNavigateToFollowUps} className="text-sm">
+                All <ArrowRight className="w-4 h-4" />
               </Button>
-            )}
-          </div>
-
-          {pendingTasks.length === 0 ? (
-            <p className={`${muted} py-6 text-center`}>Nothing pending.</p>
+            )
+          }
+        >
+          {shownTasks.length === 0 ? (
+            <p className={muted}>Nothing pending.</p>
           ) : (
-            <div className="divide-y divide-gray-100 dark:divide-gray-700/70">
-              {pendingTasks.slice(0, 4).map((task) => (
+            <div className="-my-1 divide-y divide-gray-100 dark:divide-gray-700/60">
+              {shownTasks.map((task) => (
                 <TaskRow
                   key={task.id}
                   task={task}
@@ -290,53 +235,45 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               ))}
             </div>
           )}
-        </Card>
+        </Panel>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
-        {/* Conversation insights */}
-        {/* <Card as="section" className="lg:col-span-3 p-5">
-          <SectionTitle icon={MessagesSquare}>Conversation insights</SectionTitle>
-          {topObjection ? (
-            <>
-              <p className="text-sm text-gray-600 dark:text-gray-300 mt-3">
-                <span className="font-semibold text-gray-900 dark:text-gray-100">Common objection:</span>{' '}
-                {topObjection.category}
-              </p>
-              <div className="mt-2.5 flex items-center gap-4">
-                <div className="flex-1 h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-blue-600 rounded-full"
-                    style={{ width: `${Math.round((topObjection.count / recordings.length) * 100)}%` }}
-                  />
-                </div>
-                <span className="text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                  {topObjection.count} of {plural(recordings.length, 'conversation')}
-                </span>
-              </div>
-            </>
+      {/* Where conversion is won and lost */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-5">
+        <Panel title="Conversion funnel" icon={Filter}>
+          {overview.totalLeads === 0 ? (
+            <p className={muted}>No leads came in during this period.</p>
           ) : (
-            <p className={`${muted} mt-3`}>No objections detected yet.</p>
+            <FunnelSteps steps={overview.funnel} />
           )}
-        </Card> */}
+        </Panel>
 
-        {/* Next step */}
-        {/* <Card as="section" className="lg:col-span-2 p-5 flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <SectionTitle icon={Lightbulb}>Next step</SectionTitle>
-            <p className="text-sm text-gray-600 dark:text-gray-300 mt-3">{nextStep.text}</p>
-          </div>
-          <button
-            onClick={nextStep.run}
-            className="w-11 h-11 shrink-0 rounded-full bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center transition-colors cursor-pointer"
-            aria-label={nextStep.text}
-          >
-            <ArrowRight className="w-5 h-5" />
-          </button>
-        </Card> */}
+        <Panel title="Conversion by treatment" icon={Target}>
+          {byTreatment.length === 0 ? (
+            <p className={muted}>No leads came in during this period.</p>
+          ) : (
+            <MeterList
+              rows={byTreatment.map((row) => ({
+                label: row.label,
+                percent: row.conversionRate,
+                value: `${row.conversionRate}%`,
+                detail: `${row.converted} of ${plural(row.leads, 'lead')}${row.lost ? ` · ${row.lost} lost` : ''}`,
+                tone: 'good',
+              }))}
+            />
+          )}
+        </Panel>
+
+        <LossReasonsCard
+          overview={overview}
+          className="lg:col-span-2 xl:col-span-1"
+          action={
+            <Button variant="link" onClick={onNavigateToInsights} className="text-sm">
+              Insights <ArrowRight className="w-4 h-4" />
+            </Button>
+          }
+        />
       </div>
-      </>
-      )}
     </div>
   );
 };

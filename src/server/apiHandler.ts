@@ -3,12 +3,47 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import { ANALYSIS_SCHEMA } from './analysisSchema.js';
 
 const MODEL = 'gemini-3.8-flash';
+// Optional second model to try when the main one stays overloaded, e.g. GEMINI_FALLBACK_MODEL=gemini-2.5-flash
+const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL?.trim() || '';
 
-// A key sent from the app's Settings takes priority over the server's own
-function resolveApiKey(req: IncomingMessage): { key?: string; source: 'user' | 'server' | 'none' } {
-  const header = req.headers['x-gemini-api-key'];
-  const userKey = (Array.isArray(header) ? header[0] : header)?.trim();
-  if (userKey) return { key: userKey, source: 'user' };
+// Gemini sometimes answers 503 "high demand" (or 500/504) for a short while; these are worth retrying
+function isTemporaryGeminiError(err: any): boolean {
+  const status = Number(err?.status ?? err?.code ?? err?.error?.code);
+  const message = String(err?.message || '');
+  return (
+    [500, 502, 503, 504].includes(status) ||
+    /\b(500|502|503|504)\b|UNAVAILABLE|overloaded|high demand|INTERNAL|DEADLINE_EXCEEDED|try again later/i.test(message)
+  );
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Retries temporary failures with growing pauses (about 2, 4 and 8 seconds), then tries the fallback model
+async function withGeminiRetry<T>(run: (model: string) => Promise<T>): Promise<T> {
+  const delays = [2000, 4000, 8000];
+  const models = FALLBACK_MODEL && FALLBACK_MODEL !== MODEL ? [MODEL, FALLBACK_MODEL] : [MODEL];
+  let lastError: unknown;
+  for (const model of models) {
+    for (let attempt = 0; attempt <= delays.length; attempt++) {
+      try {
+        return await run(model);
+      } catch (err) {
+        lastError = err;
+        if (!isTemporaryGeminiError(err)) throw err;
+        if (attempt < delays.length) {
+          const wait = delays[attempt] + Math.round(Math.random() * 500);
+          console.warn(`Gemini (${model}) is busy; retrying in ${wait} ms`);
+          await sleep(wait);
+        }
+      }
+    }
+    if (model !== models[models.length - 1]) console.warn(`Gemini (${model}) stayed busy; trying ${FALLBACK_MODEL}`);
+  }
+  throw lastError;
+}
+
+// The Gemini key comes only from the server's environment (.env.local), never from the browser
+function resolveApiKey(_req: IncomingMessage): { key?: string; source: 'server' | 'none' } {
   const serverKey = process.env.GEMINI_API_KEY?.trim();
   return serverKey ? { key: serverKey, source: 'server' } : { source: 'none' };
 }
@@ -23,13 +58,16 @@ function isSchemaRejection(err: any): boolean {
   return /INVALID_ARGUMENT|response_?schema|too many states/i.test(message) && !/API key/i.test(message);
 }
 
-const NO_KEY_MESSAGE = 'No Gemini API key is set. Add your key in Settings.';
+const NO_KEY_MESSAGE = 'No Gemini API key is set. Add GEMINI_API_KEY to .env.local on the server and restart the app.';
 
 // Gemini reports a bad key as a long JSON blob; turn it into one clear sentence
 function describeGeminiError(err: any, fallback: string): string {
   const message = String(err?.message || '');
   if (/API key not valid|API_KEY_INVALID|PERMISSION_DENIED|UNAUTHENTICATED/i.test(message)) {
-    return 'The Gemini API key was rejected. Check the key in Settings.';
+    return 'The Gemini API key was rejected. Check GEMINI_API_KEY in .env.local.';
+  }
+  if (isTemporaryGeminiError(err)) {
+    return 'Gemini is very busy right now and did not respond after several tries. This usually clears within a few minutes; please try again shortly.';
   }
   if (/RESOURCE_EXHAUSTED|quota/i.test(message)) {
     return 'The Gemini API key has run out of quota. Check your plan and billing with Google.';
@@ -229,6 +267,11 @@ CRITICAL RULES:
 - suggestedStage: where this lead stands at the END of the conversation. "Contacted" = an enquiry or call with no appointment yet. "Consultation Booked" = an appointment was fixed but the examination has not happened. "Consultation Completed" = the patient was examined and treatment was discussed, but they have not committed. "Converted" = the patient agreed and a treatment date was booked. null if unclear.
 - lossReason: if this patient does not go ahead, the single most likely reason, judged from what they said. null if they showed no real hesitation.
 
+7. FOLLOW-UP MESSAGE:
+- followUpMessage: a short WhatsApp message (under 60 words) from the clinic to the patient, written in the language the patient mostly spoke (Hindi in Devanagari, English, or Hinglish in Latin script).
+- Greet them by name if it was said, address their main concern in one sentence, and propose the next step that was agreed (or a sensible one if none was).
+- Warm and patient-first: no pressure, no discounts or promises, and no medical claims beyond what was said in the conversation. Sign off as the clinic, not as a person.
+
 Output MUST be strictly valid JSON matching the requested schema. No markdown wrapping outside the JSON.`;
 
       const now = new Date();
@@ -264,8 +307,9 @@ Analyze this audio file thoroughly and return the complete JSON object.`;
       }
 
       const analyze = (enforceSchema: boolean) =>
-        ai.models.generateContent({
-          model: MODEL,
+        withGeminiRetry((model) =>
+          ai.models.generateContent({
+          model,
           contents: {
             parts: [audioPart, { text: enforceSchema ? promptText : `${promptText}\n\n${SCHEMA_AS_TEXT}` }],
           },
@@ -275,7 +319,8 @@ Analyze this audio file thoroughly and return the complete JSON object.`;
             temperature: 0.2,
             ...(enforceSchema ? { responseSchema: ANALYSIS_SCHEMA } : {}),
           },
-        });
+        })
+        );
 
       let response;
       try {

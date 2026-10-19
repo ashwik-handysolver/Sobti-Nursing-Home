@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { UploadCloud, FileAudio, AlertCircle, X, Mic, Square, Sparkles } from 'lucide-react';
+import { UploadCloud, FileAudio, AlertCircle, X, Mic, MicOff, Square, Sparkles, Loader2 } from 'lucide-react';
 import { ClientLead, LanguageMode, MeetingRecording, ProcessingStage } from '../types/meeting';
 import { saveRecordingAudio } from '../utils/audioStore';
 import { buildAnalysisFields, requestAnalysis } from '../utils/analyzeRecording';
 import { Avatar, Button, IconButton, muted, SegmentedControl } from './ui';
 
 interface AudioUploadZoneProps {
+  mode?: 'upload' | 'record'; // upload a file, or record with the microphone
   onProcessingSuccess: (recording: MeetingRecording) => void;
   clients?: ClientLead[];
   defaultLanguage?: LanguageMode;
@@ -36,6 +37,7 @@ export const AudioUploadZone: React.FC<AudioUploadZoneProps> = ({
   defaultLanguage = 'auto',
   preSelectedClient,
   onClearPreSelectedClient,
+  mode = 'upload',
 }) => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileDuration, setFileDuration] = useState<number | null>(null);
@@ -70,6 +72,8 @@ export const AudioUploadZone: React.FC<AudioUploadZoneProps> = ({
 
   // Mic recording state
   const [isRecording, setIsRecording] = useState(false);
+  // Where the microphone stands in record mode: not asked yet, asking, allowed, blocked, or missing
+  const [micState, setMicState] = useState<'unknown' | 'prompt' | 'requesting' | 'granted' | 'denied' | 'unavailable'>('unknown');
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
@@ -197,11 +201,47 @@ export const AudioUploadZone: React.FC<AudioUploadZoneProps> = ({
       recordTimerRef.current = window.setInterval(() => {
         setRecordingSeconds((prev) => prev + 1);
       }, 1000);
+      setMicState('granted');
     } catch (err: any) {
       console.error('Microphone error:', err);
-      setErrorMsg('Microphone access was denied or is not available.');
+      if (err?.name === 'NotAllowedError' || err?.name === 'SecurityError') setMicState('denied');
+      else if (err?.name === 'NotFoundError' || err?.name === 'OverconstrainedError') setMicState('unavailable');
+      else {
+        setMicState('prompt');
+        setErrorMsg('The microphone could not be started. Check that no other app is using it, then try again.');
+      }
     }
   };
+
+  // Clicking the button asks the browser for microphone access; recording starts once it's allowed
+  const requestMicrophone = async () => {
+    setMicState('requesting');
+    await startRecording();
+  };
+
+  // In record mode, find out up front whether the browser has already been given access
+  useEffect(() => {
+    if (mode !== 'record') return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setMicState('unavailable');
+      return;
+    }
+    let status: PermissionStatus | null = null;
+    const apply = (state: PermissionState) =>
+      setMicState((current) => (current === 'requesting' ? current : state === 'denied' ? 'denied' : state === 'granted' ? 'granted' : 'prompt'));
+    navigator.permissions
+      ?.query({ name: 'microphone' as PermissionName })
+      .then((result) => {
+        status = result;
+        apply(result.state);
+        result.onchange = () => apply(result.state);
+      })
+      .catch(() => setMicState('prompt'));
+    if (!navigator.permissions) setMicState('prompt');
+    return () => {
+      if (status) status.onchange = null;
+    };
+  }, [mode]);
 
   const stopRecording = () => {
     if (mediaRecorderRef.current && isRecording) {
@@ -286,7 +326,7 @@ export const AudioUploadZone: React.FC<AudioUploadZoneProps> = ({
         }),
       };
 
-      await saveRecordingAudio(newRecId, selectedFile);
+      newRecording.audioPath = await saveRecordingAudio(newRecId, selectedFile);
 
       setProgressPercent(100);
       setStage('completed');
@@ -350,50 +390,99 @@ export const AudioUploadZone: React.FC<AudioUploadZoneProps> = ({
         </div>
       </div>
 
-      {!selectedFile ? (
-        <>
-          <div
-            onDragOver={(e) => {
-              e.preventDefault();
-              setIsDragging(true);
-            }}
-            onDragLeave={(e) => {
-              e.preventDefault();
-              setIsDragging(false);
-            }}
-            onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-            className={`border-2 border-dashed rounded-lg px-6 py-10 text-center cursor-pointer transition-colors ${
-              isDragging
-                ? 'border-blue-500 bg-blue-50/60 dark:bg-blue-950/20'
-                : 'border-gray-300 dark:border-gray-700 hover:border-blue-400 dark:hover:border-blue-500'
-            }`}
-          >
-            <UploadCloud className="w-8 h-8 mx-auto mb-3 text-gray-400" />
-            <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-              Drop an audio file here, or <span className="text-blue-600 dark:text-blue-400">browse</span>
-            </p>
-            <p className={`${muted} mt-1`}>MP3, WAV, M4A, WebM · up to 45 MB</p>
-          </div>
-
-          <div className="flex justify-center">
-            {!isRecording ? (
-              <Button variant="ghost" type="button" onClick={startRecording}>
-                <Mic className="w-4 h-4 text-rose-500" />
-                <span>Record instead</span>
-              </Button>
-            ) : (
+      {!selectedFile && mode === 'upload' ? (
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDragging(true);
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            setIsDragging(false);
+          }}
+          onDrop={handleDrop}
+          onClick={() => fileInputRef.current?.click()}
+          className={`border-2 border-dashed rounded-lg px-6 py-10 text-center cursor-pointer transition-colors ${
+            isDragging
+              ? 'border-blue-500 bg-blue-50/60 dark:bg-blue-950/20'
+              : 'border-gray-300 dark:border-gray-700 hover:border-blue-400 dark:hover:border-blue-500'
+          }`}
+        >
+          <UploadCloud className="w-8 h-8 mx-auto mb-3 text-gray-400" />
+          <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+            Drop an audio file here, or <span className="text-blue-600 dark:text-blue-400">browse</span>
+          </p>
+          <p className={`${muted} mt-1`}>MP3, WAV, M4A, WebM · up to 45 MB</p>
+        </div>
+      ) : !selectedFile ? (
+        <div className="rounded-lg border border-gray-200 dark:border-gray-700 px-6 py-8 text-center">
+          {isRecording ? (
+            <div className="space-y-5" aria-live="polite">
+              <div className="flex items-center justify-center gap-2.5">
+                <span className="relative flex w-3 h-3">
+                  <span className="absolute inline-flex w-full h-full rounded-full bg-rose-500 opacity-75 animate-ping" />
+                  <span className="relative inline-flex w-3 h-3 rounded-full bg-rose-600" />
+                </span>
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Recording</span>
+              </div>
+              <p className="text-4xl font-semibold tabular-nums text-gray-900 dark:text-gray-100">
+                {formatSeconds(recordingSeconds)}
+              </p>
               <button
                 type="button"
                 onClick={stopRecording}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium bg-rose-600 hover:bg-rose-700 text-white cursor-pointer"
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold bg-rose-600 hover:bg-rose-700 text-white cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500"
               >
-                <Square className="w-3.5 h-3.5 fill-current" />
-                <span className="tabular-nums">Stop · {formatSeconds(recordingSeconds)}</span>
+                <Square className="w-4 h-4 fill-current" />
+                Stop recording
               </button>
-            )}
-          </div>
-        </>
+            </div>
+          ) : micState === 'denied' ? (
+            <div className="space-y-3">
+              <span className="mx-auto w-12 h-12 rounded-full bg-rose-100 dark:bg-rose-500/15 text-rose-600 dark:text-rose-400 flex items-center justify-center">
+                <MicOff className="w-6 h-6" />
+              </span>
+              <p className="text-base font-semibold text-gray-900 dark:text-gray-100">Microphone access is blocked</p>
+              <p className="text-sm text-gray-600 dark:text-gray-300 max-w-sm mx-auto">
+                Click the lock or settings icon next to the address bar, allow the microphone for this site, then try again.
+              </p>
+              <Button variant="outline" type="button" onClick={requestMicrophone}>
+                Try again
+              </Button>
+            </div>
+          ) : micState === 'unavailable' ? (
+            <div className="space-y-3">
+              <span className="mx-auto w-12 h-12 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-300 flex items-center justify-center">
+                <MicOff className="w-6 h-6" />
+              </span>
+              <p className="text-base font-semibold text-gray-900 dark:text-gray-100">No microphone found</p>
+              <p className="text-sm text-gray-600 dark:text-gray-300 max-w-sm mx-auto">
+                Connect a microphone, or open this page in a browser that supports recording, then try again.
+              </p>
+              <Button variant="outline" type="button" onClick={requestMicrophone}>
+                Try again
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <span className="mx-auto w-12 h-12 rounded-full bg-blue-100 dark:bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center">
+                <Mic className="w-6 h-6" />
+              </span>
+              <p className="text-base font-semibold text-gray-900 dark:text-gray-100">
+                {micState === 'granted' ? 'Ready to record' : 'Allow microphone access'}
+              </p>
+              <p className="text-sm text-gray-600 dark:text-gray-300 max-w-sm mx-auto">
+                {micState === 'granted'
+                  ? 'Recording starts when you press the button. Stop it when the consultation ends.'
+                  : 'Your browser will ask for permission to use the microphone. Recording starts as soon as you allow it.'}
+              </p>
+              <Button type="button" onClick={requestMicrophone} disabled={micState === 'requesting' || micState === 'unknown'}>
+                {micState === 'requesting' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mic className="w-4 h-4" />}
+                {micState === 'requesting' ? 'Waiting for permission…' : micState === 'granted' ? 'Start recording' : 'Allow microphone'}
+              </Button>
+            </div>
+          )}
+        </div>
       ) : (
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700">

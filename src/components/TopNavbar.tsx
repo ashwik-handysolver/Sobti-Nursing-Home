@@ -5,6 +5,7 @@ import { GlobalSearch } from './GlobalSearch';
 import { NotificationsMenu } from './NotificationsMenu';
 import { UserMenu } from './UserMenu';
 import { IconButton } from './ui';
+import type { AppUser } from '../AuthGate';
 
 interface TopNavbarProps {
   recordings: MeetingRecording[];
@@ -15,6 +16,8 @@ interface TopNavbarProps {
   onToggleTaskStatus: (taskId: string) => void;
   onOpenFollowUps: () => void;
   onOpenSettings: () => void;
+  user: AppUser;
+  onSignOut: () => void;
 }
 
 export const TopNavbar: React.FC<TopNavbarProps> = ({
@@ -26,6 +29,8 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
   onToggleTaskStatus,
   onOpenFollowUps,
   onOpenSettings,
+  user,
+  onSignOut,
 }) => (
   // The page-coloured strip keeps scrolling content from showing above the floating bar
   <div className="sticky top-0 z-30 px-3 sm:px-4 pt-3 bg-gray-50 dark:bg-gray-900">
@@ -49,7 +54,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
           onOpenRecording={onOpenRecording}
           onViewAll={onOpenFollowUps}
         />
-        <UserMenu onOpenSettings={onOpenSettings} />
+        <UserMenu user={user} onOpenSettings={onOpenSettings} onSignOut={onSignOut} />
       </div>
     </header>
   </div>

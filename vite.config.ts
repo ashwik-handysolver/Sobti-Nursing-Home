@@ -32,6 +32,19 @@ function apiServerPlugin(): Plugin {
 export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss(), apiServerPlugin()],
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id: string) {
+            if (!id.includes('node_modules')) return undefined;
+            if (/[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return 'react';
+            if (id.includes('@supabase')) return 'supabase';
+            if (id.includes('lucide-react')) return 'icons';
+            return undefined;
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': path.resolve(import.meta.dirname, '.'),

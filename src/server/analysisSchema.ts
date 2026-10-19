@@ -129,6 +129,7 @@ export const ANALYSIS_SCHEMA: Schema = obj({
   procedureDiscussed: str('Name and details of the procedure or service discussed'),
   patientHesitation: str('Key hesitation, fear or unanswered question the patient expressed, or empty string'),
   agreedNextSteps: strings('Clear next steps agreed during the conversation, most important first'),
+  followUpMessage: str('Short WhatsApp message to the patient in their language, addressing their main concern and the next step'),
   leadSignals: obj(
     {
       treatment: choice([...CLINIC_PROCEDURES, 'Other'], 'The clinic service this conversation is mainly about'),

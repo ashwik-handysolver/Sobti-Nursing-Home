@@ -16,8 +16,8 @@
     <script>
       (function() {
         try {
-          var saved = localStorage.getItem('meetmind_theme_v1');
-          if (saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          // Day mode unless dark mode was switched on in the app; the login page is always day mode
+          if (localStorage.getItem('meetmind_theme_v2') === 'dark') {
             document.documentElement.classList.add('dark');
             document.documentElement.setAttribute('data-theme', 'dark');
           } else {

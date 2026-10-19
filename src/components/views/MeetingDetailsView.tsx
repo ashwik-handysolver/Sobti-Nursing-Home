@@ -1,36 +1,37 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   ArrowLeft,
-  BarChart3,
   CalendarCheck,
+  Check,
   Download,
   FileText,
   LayoutDashboard,
   MessageSquare,
+  Pencil,
   Plus,
   Presentation,
   RefreshCw,
   TrendingUp,
 } from 'lucide-react';
-import { MeetingRecording, MeetingTask, TranscriptSegment } from '../../types/meeting';
+import { ClientLead, ConversionPoint, MeetingRecording, MeetingTask, TranscriptSegment } from '../../types/meeting';
 import { AudioPlayer } from '../AudioPlayer';
 import { TaskDraft, TaskEditor } from '../TaskEditor';
 import { EditButton, FormActions, LinesField, TextAreaField, TextField, fromLines, toLines } from '../EditForms';
-import { RecordingGraphView } from './RecordingGraphView';
 import { PitchReviewCard } from './PitchReview';
-import { exportMeetingAsMarkdown, exportMeetingAsTxt, exportMeetingAsJson } from '../../utils/exportUtils';
+import { NextActionCard } from '../recording/NextActionCard';
+import { exportMeetingAsMarkdown } from '../../utils/exportUtils';
 import { describeDue } from '../../utils/tasks';
+import { concernsOf } from '../../utils/conversion';
 import {
   Avatar,
   BulletList,
   Button,
-  Card,
   chanceTone,
   formatRecordingDate,
   IconButton,
   muted,
+  Panel,
   SearchInput,
-  SectionTitle,
   TabOption,
   Tabs,
   TaskRow,
@@ -38,6 +39,7 @@ import {
 
 interface MeetingDetailsViewProps {
   recording: MeetingRecording;
+  client?: ClientLead; // the lead this recording belongs to, when it is linked
   onBack: () => void;
   onUpdateRecordingTasks: (recordingId: string, updatedTasks: MeetingTask[]) => void;
   onUpdateRecording: (recordingId: string, patch: Partial<MeetingRecording>) => void;
@@ -47,7 +49,7 @@ interface MeetingDetailsViewProps {
   initialTranscriptSearch?: string;
 }
 
-type DetailTab = 'overview' | 'pitch' | 'transcript' | 'graph';
+type DetailTab = 'overview' | 'pitch' | 'transcript';
 
 const SPEAKER_STYLES = [
   { name: 'text-blue-600 dark:text-blue-400', border: 'border-blue-500' },
@@ -81,8 +83,21 @@ function findSegmentForExcerpt(excerpt: string | undefined, transcript: Transcri
   return bestScore >= 0.4 ? best : null;
 }
 
+// The two moments that moved the likelihood most, in the order they happened
+function turningPoints(timeline: ConversionPoint[] | undefined) {
+  if (!timeline || timeline.length < 2) return [];
+  return timeline
+    .slice(1)
+    .map((point, i) => ({ ...point, change: point.score - timeline[i].score }))
+    .filter((p) => p.change !== 0)
+    .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
+    .slice(0, 2)
+    .sort((a, b) => a.seconds - b.seconds);
+}
+
 export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
   recording,
+  client,
   onBack,
   onUpdateRecordingTasks,
   onUpdateRecording,
@@ -92,14 +107,14 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
   initialTranscriptSearch = '',
 }) => {
   const [currentPlaybackTime, setCurrentPlaybackTime] = useState(0);
-  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [transcriptSearch, setTranscriptSearch] = useState(initialTranscriptSearch);
   const [editingTaskId, setEditingTaskId] = useState<string | 'new' | null>(null);
   const [focusedSegmentId, setFocusedSegmentId] = useState<string | null>(null);
   const [tab, setTab] = useState<DetailTab>(initialTranscriptSearch ? 'transcript' : 'overview');
+  const [isEditingTranscript, setIsEditingTranscript] = useState(false);
 
   // Which part of the analysis is being corrected by hand, and the text typed so far
-  const [editing, setEditing] = useState<'header' | 'signals' | 'summary' | null>(null);
+  const [editing, setEditing] = useState<'header' | 'summary' | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [editingSegmentId, setEditingSegmentId] = useState<string | null>(null);
   const [segmentDraft, setSegmentDraft] = useState({ speaker: '', text: '', translatedText: '', renameAll: true });
@@ -153,24 +168,20 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
   const chance = recording.estimatedConversionChance;
   const hasChance = typeof chance === 'number' && !isNaN(chance);
   const tone = hasChance ? chanceTone(chance!) : null;
+  const startChance = recording.conversionTimeline?.[0]?.score;
+  const moments = useMemo(() => turningPoints(recording.conversionTimeline), [recording.conversionTimeline]);
 
   const positives = recording.conversionFactors?.positive || [];
 
   // Each concern, linked to the transcript line it was taken from when one can be found
-  const concerns = useMemo(() => {
-    if (recording.conversionBarriers && recording.conversionBarriers.length > 0) {
-      return recording.conversionBarriers.map((b) => ({
-        text: b.description,
-        segment: findSegmentForExcerpt(b.supportingExcerpt, recording.transcript),
-      }));
-    }
-    const fallback = recording.conversionFactors?.negative?.length
-      ? recording.conversionFactors.negative
-      : recording.patientHesitation
-      ? [recording.patientHesitation]
-      : [];
-    return fallback.map((text) => ({ text, segment: null as TranscriptSegment | null }));
-  }, [recording]);
+  const concerns = useMemo(
+    () =>
+      concernsOf(recording).map((c) => ({
+        text: c.text,
+        segment: findSegmentForExcerpt(c.excerpt, recording.transcript),
+      })),
+    [recording]
+  );
 
   const keyPoints = useMemo(() => {
     if (recording.summary.quickBulletOverview?.length) return recording.summary.quickBulletOverview;
@@ -237,15 +248,22 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
     setCurrentPlaybackTime(segment.startSeconds);
   };
 
-  const startEdit = (section: 'header' | 'signals' | 'summary') => {
+  // Land on the transcript line that was being spoken at a moment
+  const jumpToSeconds = (seconds: number) => {
+    const line = [...recording.transcript].reverse().find((seg) => seg.startSeconds <= seconds);
+    if (line) jumpToSegment(line);
+    else setCurrentPlaybackTime(seconds);
+  };
+
+  const startEdit = (section: 'header' | 'summary') => {
     setDraft(
       section === 'header'
         ? { title: recording.title, salesperson: recording.salespersonName || '' }
-        : section === 'signals'
-        ? { positives: toLines(positives), concerns: toLines(concerns.map((c) => c.text)) }
         : {
             summary: recording.summary.executiveSummary || recording.patientGoal || '',
             keyPoints: toLines(keyPoints),
+            concerns: toLines(concerns.map((c) => c.text)),
+            positives: toLines(positives),
             nextSteps: toLines(nextSteps),
           }
     );
@@ -259,10 +277,21 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
         title: draft.title.trim() || recording.title,
         salespersonName: draft.salesperson.trim() || undefined,
       });
-    } else if (editing === 'signals') {
+    } else if (editing === 'summary') {
+      const points = fromLines(draft.keyPoints);
+      const steps = fromLines(draft.nextSteps);
       const concernLines = fromLines(draft.concerns);
       const existing = recording.conversionBarriers || [];
       onUpdateRecording(recording.id, {
+        summary: {
+          ...recording.summary,
+          executiveSummary: draft.summary.trim(),
+          quickBulletOverview: points,
+          keyTopics: points.length ? recording.summary.keyTopics : [],
+          outcomes: steps.length ? recording.summary.outcomes : [],
+        },
+        agreedNextSteps: steps,
+        patientGoal: draft.summary.trim() ? recording.patientGoal : undefined,
         conversionFactors: { positive: fromLines(draft.positives), negative: concernLines },
         // Unchanged concerns keep their link to the transcript; new ones are added as written
         conversionBarriers: concernLines.map(
@@ -275,20 +304,6 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
             }
         ),
         patientHesitation: undefined,
-      });
-    } else if (editing === 'summary') {
-      const points = fromLines(draft.keyPoints);
-      const steps = fromLines(draft.nextSteps);
-      onUpdateRecording(recording.id, {
-        summary: {
-          ...recording.summary,
-          executiveSummary: draft.summary.trim(),
-          quickBulletOverview: points,
-          keyTopics: points.length ? recording.summary.keyTopics : [],
-          outcomes: steps.length ? recording.summary.outcomes : [],
-        },
-        agreedNextSteps: steps,
-        patientGoal: draft.summary.trim() ? recording.patientGoal : undefined,
       });
     }
     setEditing(null);
@@ -333,23 +348,31 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
   // Each tab says how much is behind it
   const tabs: TabOption<DetailTab>[] = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-    { id: 'pitch', label: 'Pitch', icon: Presentation, badge: recording.pitchAnalysis?.overallScore },
+    { id: 'pitch', label: 'Consultation review', icon: Presentation, badge: recording.pitchAnalysis?.overallScore },
     { id: 'transcript', label: 'Transcript', icon: MessageSquare, badge: recording.transcript.length || undefined },
-    { id: 'graph', label: 'Graph', icon: BarChart3 },
   ];
 
-  const exportOptions = [
-    { label: 'Markdown', run: exportMeetingAsMarkdown },
-    { label: 'Plain text', run: exportMeetingAsTxt },
-    { label: 'JSON', run: exportMeetingAsJson },
-  ];
+  const renderConcern = (concern: (typeof concerns)[number]) => (
+    <>
+      {concern.text}{' '}
+      {concern.segment && (
+        <button
+          onClick={() => jumpToSegment(concern.segment!)}
+          className="text-xs tabular-nums font-medium text-blue-600 dark:text-blue-400 hover:underline cursor-pointer whitespace-nowrap"
+          title="Jump to where this was said"
+        >
+          ▸ {concern.segment.timestamp}
+        </button>
+      )}
+    </>
+  );
 
   return (
-    <div className="space-y-4 pb-12">
+    <div className="space-y-5 pb-12">
       {/* Header */}
-      <header className="flex flex-col sm:flex-row sm:items-start justify-between gap-x-3 gap-y-2">
+      <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-x-3 gap-y-2">
         <div className="flex items-center gap-3 min-w-0">
-          <IconButton onClick={onBack} title="Back" aria-label="Back to recordings">
+          <IconButton onClick={onBack} title="Back" aria-label="Back">
             <ArrowLeft className="w-5 h-5" />
           </IconButton>
           {recording.clientName && <Avatar name={recording.clientName} size="lg" />}
@@ -360,36 +383,35 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
               <FormActions onCancel={() => setEditing(null)} />
             </form>
           ) : (
-          <div className="min-w-0 self-center">
-            <div className="flex items-center gap-1 min-w-0">
-              <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100 sm:truncate">{recording.title}</h1>
-              <EditButton onClick={() => startEdit('header')} label="Edit title and who led the consultation" />
+            <div className="min-w-0">
+              <div className="flex items-center gap-1 min-w-0">
+                <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100 sm:truncate">{recording.title}</h1>
+                <EditButton onClick={() => startEdit('header')} label="Edit title and who led the consultation" />
+              </div>
+              <p className={`${muted} mt-0.5`}>
+                {recording.clientName &&
+                  (recording.clientId && onNavigateToPatient ? (
+                    <button
+                      onClick={() => onNavigateToPatient(recording.clientId!)}
+                      className="text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                    >
+                      {recording.clientName}
+                    </button>
+                  ) : (
+                    <span>{recording.clientName}</span>
+                  ))}
+                {recording.clientName && ' · '}
+                {[recording.salespersonName, formatRecordingDate(recording.uploadDate).date].filter(Boolean).join(' · ')}
+              </p>
             </div>
-            <p className={`${muted} mt-0.5`}>
-              {recording.clientName &&
-                (recording.clientId && onNavigateToPatient ? (
-                  <button
-                    onClick={() => onNavigateToPatient(recording.clientId!)}
-                    className="text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
-                  >
-                    {recording.clientName}
-                  </button>
-                ) : (
-                  <span>{recording.clientName}</span>
-                ))}
-              {recording.clientName && ' · '}
-              {[recording.salespersonName, formatRecordingDate(recording.uploadDate).date].filter(Boolean).join(' · ')}
-            </p>
-          </div>
           )}
         </div>
 
-        <div className="relative shrink-0 self-end sm:self-auto flex items-center gap-2">
+        <div className="shrink-0 self-end sm:self-auto flex items-center gap-1.5">
           <Button
             variant="ghost"
             onClick={() => onReanalyze(recording.id)}
             disabled={Boolean(recording.isDemo) || isReanalyzing}
-            className="disabled:opacity-40 disabled:cursor-not-allowed"
             title={
               recording.isDemo
                 ? 'Sample recordings have no real audio to analyze'
@@ -399,31 +421,10 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
             <RefreshCw className={`w-4 h-4 ${isReanalyzing ? 'animate-spin' : ''}`} />
             <span>{isReanalyzing ? 'Analyzing…' : 'Re-analyze'}</span>
           </Button>
-          <Button
-            variant="ghost"
-            onClick={() => setIsExportMenuOpen(!isExportMenuOpen)}
-            aria-expanded={isExportMenuOpen}
-            aria-haspopup="true"
-          >
+          <Button variant="ghost" onClick={() => exportMeetingAsMarkdown(recording)} title="Download the analysis as a report">
             <Download className="w-4 h-4" />
-            <span>Export</span>
+            <span>Report</span>
           </Button>
-          {isExportMenuOpen && (
-            <Card className="absolute right-0 top-full mt-1 w-36 py-1 shadow-md z-30">
-              {exportOptions.map((opt) => (
-                <button
-                  key={opt.label}
-                  onClick={() => {
-                    opt.run(recording);
-                    setIsExportMenuOpen(false);
-                  }}
-                  className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer"
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </Card>
-          )}
         </div>
       </header>
 
@@ -445,197 +446,188 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
 
       <Tabs<DetailTab> value={tab} onChange={setTab} options={tabs} aria-label="Recording sections" />
 
-      {tab === 'graph' && (
-        <RecordingGraphView
-          recording={recording}
-          currentTime={currentPlaybackTime}
-          positives={positives}
-          concerns={concerns}
-          keyPoints={keyPoints}
-          nextSteps={nextSteps}
-          onSeek={setCurrentPlaybackTime}
-          onToggleTask={handleToggleTask}
-        />
-      )}
+      {tab === 'overview' && (
+        <div className="space-y-5">
+          <NextActionCard
+            recording={recording}
+            client={client}
+            nextStep={nextSteps[0] || client?.conversionNextStep}
+            concern={concerns[0]}
+            onJump={jumpToSegment}
+          />
 
-      <div className={`grid grid-cols-1 lg:grid-cols-5 gap-4 items-start ${tab === 'overview' ? '' : 'hidden'}`}>
-        {/* Left: conversion + follow-ups */}
-        <div className="lg:col-span-2 space-y-4">
-          <Card as="section" className="p-5">
-            <div className="flex items-center justify-between gap-2">
-              <SectionTitle icon={TrendingUp}>Conversion probability</SectionTitle>
-              {editing !== 'signals' && (
-                <EditButton onClick={() => startEdit('signals')} label="Edit in favour and concerns" />
-              )}
-            </div>
-
-            {hasChance && tone ? (
-              <>
-                <div className="mt-4 flex items-baseline gap-2.5">
-                  <span className="text-5xl font-semibold tracking-tight text-gray-900 dark:text-gray-100 tabular-nums">
-                    {chance}%
-                  </span>
-                  <span className={`text-sm font-medium ${tone.text}`}>{tone.label}</span>
-                </div>
-                <div className="mt-3 w-full h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
-                  <div className={`h-full rounded-full ${tone.bar}`} style={{ width: `${chance}%` }} />
-                </div>
-              </>
-            ) : (
-              <p className={`${muted} mt-2`}>No estimate for this recording.</p>
-            )}
-
-            {editing === 'signals' && (
-              <form onSubmit={saveSection} className="mt-5 space-y-3">
-                <LinesField label="In favour" value={draft.positives || ''} onChange={setField('positives')} autoFocus />
-                <LinesField label="Concerns" value={draft.concerns || ''} onChange={setField('concerns')} />
-                <FormActions onCancel={() => setEditing(null)} />
-              </form>
-            )}
-
-            {editing !== 'signals' && (positives.length > 0 || concerns.length > 0) && (
-              <div className="mt-5 space-y-4">
-                <BulletList title="In favour" items={positives} dot="bg-emerald-500" />
-
-                <BulletList
-                  title="Concerns"
-                  items={concerns}
-                  dot="bg-amber-500"
-                  renderItem={(concern) => (
-                    <>
-                      {concern.text}{' '}
-                      {concern.segment && (
-                        <button
-                          onClick={() => jumpToSegment(concern.segment!)}
-                          className="text-xs tabular-nums font-medium text-blue-600 dark:text-blue-400 hover:underline cursor-pointer whitespace-nowrap"
-                          title="Jump to where this was said"
-                        >
-                          ▸ {concern.segment.timestamp}
-                        </button>
-                      )}
-                    </>
-                  )}
-                />
-              </div>
-            )}
-          </Card>
-
-          <Card as="section" className="p-5">
-            <div className="flex items-center justify-between">
-              <SectionTitle icon={CalendarCheck}>Follow-ups</SectionTitle>
-              <div className="flex items-center gap-3">
-                {recording.tasks.length > 0 && (
-                  <span className={`${muted} tabular-nums`}>
-                    {completedTasksCount}/{recording.tasks.length} done
-                  </span>
-                )}
-                {editingTaskId !== 'new' && (
-                  <Button variant="link" onClick={() => setEditingTaskId('new')}>
-                    <Plus className="w-4 h-4" /> Add
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            {recording.tasks.length === 0 && editingTaskId !== 'new' && (
-              <p className={`${muted} mt-2`}>No follow-ups came out of this conversation.</p>
-            )}
-
-            <div className="mt-1 divide-y divide-gray-100 dark:divide-gray-700/60">
-              {recording.tasks.map((task) => {
-                const due = describeDue(task, recording.uploadDate);
-                return editingTaskId === task.id ? (
-                  <TaskEditor
-                    key={task.id}
-                    task={task}
-                    initialDueISO={due.iso}
-                    onSave={handleSaveTask}
-                    onCancel={() => setEditingTaskId(null)}
-                    onDelete={() => handleDeleteTask(task.id)}
-                  />
-                ) : (
-                  <TaskRow
-                    key={task.id}
-                    task={task}
-                    due={due}
-                    onToggle={() => handleToggleTask(task.id)}
-                    onEdit={() => setEditingTaskId(task.id)}
-                  />
-                );
-              })}
-              {editingTaskId === 'new' && (
-                <TaskEditor onSave={handleSaveTask} onCancel={() => setEditingTaskId(null)} />
-              )}
-            </div>
-          </Card>
-        </div>
-
-        {/* Right: summary */}
-        <div className="lg:col-span-3 space-y-4">
-          <Card as="section" className="p-5 space-y-4">
-            <div className="flex items-center justify-between gap-2">
-              <SectionTitle icon={FileText}>Summary</SectionTitle>
-              {editing !== 'summary' && <EditButton onClick={() => startEdit('summary')} label="Edit summary" />}
-            </div>
-            {editing === 'summary' ? (
-              <form onSubmit={saveSection} className="space-y-3">
-                <TextAreaField label="Summary (used in exports)" value={draft.summary || ''} onChange={setField('summary')} rows={5} autoFocus />
-                <LinesField label="Key points" value={draft.keyPoints || ''} onChange={setField('keyPoints')} />
-                <LinesField label="Next steps" value={draft.nextSteps || ''} onChange={setField('nextSteps')} />
-                <FormActions onCancel={() => setEditing(null)} />
-              </form>
-            ) : (
-              <>
-                {keyPoints.length === 0 &&
-                  (summaryText ? (
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-5 items-start">
+            <Panel
+              title="Consultation summary"
+              icon={FileText}
+              action={editing !== 'summary' && <EditButton onClick={() => startEdit('summary')} label="Edit summary" />}
+              className="xl:col-span-2"
+            >
+              {editing === 'summary' ? (
+                <form onSubmit={saveSection} className="space-y-3">
+                  <TextAreaField label="Summary (used in the report)" value={draft.summary || ''} onChange={setField('summary')} rows={3} autoFocus />
+                  <LinesField label="Key points" value={draft.keyPoints || ''} onChange={setField('keyPoints')} />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <LinesField label="Concerns" value={draft.concerns || ''} onChange={setField('concerns')} />
+                    <LinesField label="In favour" value={draft.positives || ''} onChange={setField('positives')} />
+                  </div>
+                  <LinesField label="Next steps" value={draft.nextSteps || ''} onChange={setField('nextSteps')} />
+                  <FormActions onCancel={() => setEditing(null)} />
+                </form>
+              ) : (
+                <div className="space-y-5">
+                  {keyPoints.length > 0 ? (
+                    <BulletList title="Key points" items={keyPoints} dot="bg-gray-400" />
+                  ) : summaryText ? (
                     <p className="text-sm text-gray-800 dark:text-gray-200 leading-relaxed">{summaryText}</p>
                   ) : (
                     <p className={muted}>No summary available.</p>
-                  ))}
-                <BulletList title="Key points" items={keyPoints} dot="bg-gray-400" />
-                <BulletList title="Next steps" items={nextSteps} dot="bg-blue-500" />
-              </>
-            )}
-          </Card>
-        </div>
-      </div>
+                  )}
+                  {(concerns.length > 0 || positives.length > 0) && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-4 border-t border-gray-100 dark:border-gray-700/60">
+                      <BulletList title="Concerns" items={concerns} dot="bg-amber-500" renderItem={renderConcern} />
+                      <BulletList title="In favour" items={positives} dot="bg-emerald-500" />
+                    </div>
+                  )}
+                  {nextSteps.length > 0 && (
+                    <div className="pt-4 border-t border-gray-100 dark:border-gray-700/60">
+                      <BulletList title="Agreed next steps" items={nextSteps} dot="bg-blue-500" />
+                    </div>
+                  )}
+                </div>
+              )}
+            </Panel>
 
-      {tab === 'pitch' && (
-        <PitchReviewCard
-          pitch={recording.pitchAnalysis}
-          onJump={(seconds) => {
-            // Land on the transcript line that was being spoken at that moment
-            const line = [...recording.transcript].reverse().find((seg) => seg.startSeconds <= seconds);
-            if (line) jumpToSegment(line);
-            else setCurrentPlaybackTime(seconds);
-          }}
-        />
+            <div className="space-y-5">
+              <Panel title="Likelihood to go ahead" icon={TrendingUp}>
+                {hasChance && tone ? (
+                  <>
+                    <div className="flex items-baseline gap-2.5">
+                      <span className="text-4xl font-semibold tracking-tight text-gray-900 dark:text-gray-100 tabular-nums">
+                        {chance}%
+                      </span>
+                      <span className={`text-sm font-medium ${tone.text}`}>{tone.label}</span>
+                    </div>
+                    <div className="mt-3 w-full h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full ${tone.bar}`} style={{ width: `${chance}%` }} />
+                    </div>
+                    {typeof startChance === 'number' && startChance !== chance && (
+                      <p className={`${muted} mt-2`}>
+                        Started at {startChance}%, {chance! > startChance ? 'up' : 'down'} {Math.abs(chance! - startChance)} points
+                        by the end
+                      </p>
+                    )}
+                    {moments.length > 0 && (
+                      <ul className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700/60 space-y-2.5">
+                        {moments.map((m) => (
+                          <li key={m.seconds} className="flex items-start gap-2.5 text-sm">
+                            <span
+                              className={`shrink-0 w-11 text-xs font-semibold tabular-nums ${
+                                m.change > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
+                              }`}
+                            >
+                              {m.change > 0 ? '▲' : '▼'} {Math.abs(m.change)}
+                            </span>
+                            <span className="min-w-0 text-gray-700 dark:text-gray-300 leading-snug">
+                              {m.reason}{' '}
+                              <button
+                                onClick={() => jumpToSeconds(m.seconds)}
+                                className="text-xs tabular-nums font-medium text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                              >
+                                ▸ {m.timestamp}
+                              </button>
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                ) : (
+                  <p className={muted}>No estimate for this recording.</p>
+                )}
+              </Panel>
+
+              <Panel
+                title="Follow-ups"
+                icon={CalendarCheck}
+                subtitle={recording.tasks.length > 0 ? `${completedTasksCount} of ${recording.tasks.length} done` : undefined}
+                action={
+                  editingTaskId !== 'new' && (
+                    <Button variant="link" onClick={() => setEditingTaskId('new')} className="text-sm">
+                      <Plus className="w-4 h-4" /> Add
+                    </Button>
+                  )
+                }
+              >
+                {recording.tasks.length === 0 && editingTaskId !== 'new' && (
+                  <p className={muted}>No follow-ups came out of this conversation.</p>
+                )}
+                <div className="-my-1 divide-y divide-gray-100 dark:divide-gray-700/60">
+                  {recording.tasks.map((task) => {
+                    const due = describeDue(task, recording.uploadDate);
+                    return editingTaskId === task.id ? (
+                      <TaskEditor
+                        key={task.id}
+                        task={task}
+                        initialDueISO={due.iso}
+                        onSave={handleSaveTask}
+                        onCancel={() => setEditingTaskId(null)}
+                        onDelete={() => handleDeleteTask(task.id)}
+                      />
+                    ) : (
+                      <TaskRow
+                        key={task.id}
+                        task={task}
+                        due={due}
+                        onToggle={() => handleToggleTask(task.id)}
+                        onEdit={() => setEditingTaskId(task.id)}
+                      />
+                    );
+                  })}
+                  {editingTaskId === 'new' && <TaskEditor onSave={handleSaveTask} onCancel={() => setEditingTaskId(null)} />}
+                </div>
+              </Panel>
+            </div>
+          </div>
+        </div>
       )}
 
+      {tab === 'pitch' && <PitchReviewCard pitch={recording.pitchAnalysis} onJump={jumpToSeconds} />}
+
       {tab === 'transcript' && (
-        <Card as="section" className="p-5">
-          <div className="flex items-center justify-between gap-3">
-            <SectionTitle icon={MessageSquare}>Transcript</SectionTitle>
-            {recording.transcript.length > 0 && (
-              <SearchInput
-                value={transcriptSearch}
-                onChange={(e) => setTranscriptSearch(e.target.value)}
-                placeholder="Search"
-                aria-label="Search transcript"
-                wrapperClassName="w-44 sm:w-56"
-                className="py-1.5"
-              />
-            )}
-          </div>
-
-          <div className="mt-3">
-
+        <Panel
+          title="Transcript"
+          icon={MessageSquare}
+          action={
+            recording.transcript.length > 0 && (
+              <div className="flex items-center gap-2">
+                <SearchInput
+                  value={transcriptSearch}
+                  onChange={(e) => setTranscriptSearch(e.target.value)}
+                  placeholder="Search"
+                  aria-label="Search transcript"
+                  wrapperClassName="w-40 sm:w-56"
+                  className="py-1.5"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setIsEditingTranscript((prev) => !prev);
+                    setEditingSegmentId(null);
+                  }}
+                >
+                  {isEditingTranscript ? <Check className="w-3.5 h-3.5" /> : <Pencil className="w-3.5 h-3.5" />}
+                  {isEditingTranscript ? 'Done' : 'Edit'}
+                </Button>
+              </div>
+            )
+          }
+        >
           {filteredTranscript.length === 0 ? (
-            <p className={muted}>
-              {recording.transcript.length === 0 ? 'No transcript available.' : 'No matches.'}
-            </p>
+            <p className={muted}>{recording.transcript.length === 0 ? 'No transcript available.' : 'No matches.'}</p>
           ) : (
-            <div ref={transcriptRef} className="relative max-h-[560px] overflow-y-auto pr-1 space-y-1">
+            <div ref={transcriptRef} className="relative max-h-[600px] overflow-y-auto pr-1 space-y-1">
               {filteredTranscript.map((segment) => {
                 const style = speakerStyles[segment.speaker] || SPEAKER_STYLES[0];
                 return (
@@ -644,7 +636,7 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
                     ref={(el) => {
                       segmentRefs.current[segment.id] = el;
                     }}
-                    className={`group pl-3 pr-2 py-2 border-l-2 rounded-r-md transition-colors ${style.border} ${
+                    className={`pl-3 pr-2 py-2 border-l-2 rounded-r-md transition-colors ${style.border} ${
                       segment.id === activeSegmentId ? 'bg-blue-50 dark:bg-blue-500/10' : ''
                     }`}
                   >
@@ -683,36 +675,34 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
                       </form>
                     ) : (
                       <>
-                    <div className="flex items-baseline gap-2 mb-0.5">
-                      <span className={`text-sm font-semibold ${style.name}`}>{segment.speaker}</span>
-                      <button
-                        onClick={() => {
-                          setFocusedSegmentId(segment.id);
-                          setCurrentPlaybackTime(segment.startSeconds);
-                        }}
-                        className="text-xs tabular-nums text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:underline cursor-pointer"
-                        title="Play from here"
-                      >
-                        {segment.timestamp}
-                      </button>
-                      <EditButton
-                        onClick={() => startSegmentEdit(segment)}
-                        label="Edit this line"
-                        className="ml-auto self-center -my-1 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100"
-                      />
-                    </div>
-                    <p
-                      className={`text-sm leading-relaxed ${
-                        segment.isUnclear
-                          ? 'text-gray-500 dark:text-gray-400 italic'
-                          : 'text-gray-700 dark:text-gray-300'
-                      }`}
-                    >
-                      {segment.text}
-                    </p>
-                    {segment.translatedText && (
-                      <p className={`${muted} mt-1 leading-relaxed`}>{segment.translatedText}</p>
-                    )}
+                        <div className="flex items-baseline gap-2 mb-0.5">
+                          <span className={`text-sm font-semibold ${style.name}`}>{segment.speaker}</span>
+                          <button
+                            onClick={() => {
+                              setFocusedSegmentId(segment.id);
+                              setCurrentPlaybackTime(segment.startSeconds);
+                            }}
+                            className="text-xs tabular-nums text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:underline cursor-pointer"
+                            title="Play from here"
+                          >
+                            {segment.timestamp}
+                          </button>
+                          {isEditingTranscript && (
+                            <EditButton
+                              onClick={() => startSegmentEdit(segment)}
+                              label="Edit this line"
+                              className="ml-auto self-center -my-1"
+                            />
+                          )}
+                        </div>
+                        <p
+                          className={`text-sm leading-relaxed ${
+                            segment.isUnclear ? 'text-gray-500 dark:text-gray-400 italic' : 'text-gray-700 dark:text-gray-300'
+                          }`}
+                        >
+                          {segment.text}
+                        </p>
+                        {segment.translatedText && <p className={`${muted} mt-1 leading-relaxed`}>{segment.translatedText}</p>}
                       </>
                     )}
                   </div>
@@ -720,8 +710,7 @@ export const MeetingDetailsView: React.FC<MeetingDetailsViewProps> = ({
               })}
             </div>
           )}
-          </div>
-        </Card>
+        </Panel>
       )}
     </div>
   );

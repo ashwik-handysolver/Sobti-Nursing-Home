@@ -234,7 +234,8 @@ export interface MeetingRecording {
   status: 'completed' | 'processing' | 'failed';
   error?: string;
   isDemo?: boolean;
-  audioUrl?: string; // object URL or generated sample tone
+  audioUrl?: string; // temporary playback link
+  audioPath?: string; // where the audio is kept in Supabase Storage
   clientId?: string; // linked client / patient id
   clientName?: string; // patient name
   salespersonName?: string; // the doctor or counsellor who led the conversation (name kept for saved data)
@@ -245,6 +246,7 @@ export interface MeetingRecording {
   conversionTimeline?: ConversionPoint[]; // likelihood across the conversation, in time order
   conversionBarriers?: ConversionBarrier[];
   leadSignals?: LeadSignals;
+  followUpMessage?: string; // a drafted WhatsApp message to the patient, from the analysis
   patientGoal?: string; // Why the patient contacted the clinic
   procedureDiscussed?: string; // Procedure or service discussed
   patientHesitation?: string; // Expressed interest or hesitation

@@ -28,5 +28,7 @@ export const LEAD_SOURCES: LeadSource[] = [
   'Other',
 ];
 
-// There is no sign-in yet, so the app runs as the clinic's lead doctor
-export const CURRENT_USER = { name: 'Dr. Amit Sobti', role: 'Eye Surgeon' };
+
+// Used in drafted messages to patients
+export const CLINIC_NAME = 'Sobti Nursing Home';
+export const CLINIC_PHONE = '98176-33316';

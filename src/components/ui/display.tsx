@@ -1,5 +1,5 @@
 import React from 'react';
-import { Clock, PauseCircle } from 'lucide-react';
+import { Clock, PauseCircle, MicOff } from 'lucide-react';
 import { LeadFlag, LeadStage, TaskPriority } from '../../types/meeting';
 import { card } from './styles';
 
@@ -19,25 +19,22 @@ export const PageHeader: React.FC<{
   </div>
 );
 
-const STAGE_STYLES: Record<string, string> = {
-  'New Lead': 'text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/60',
-  Contacted: 'text-cyan-700 dark:text-cyan-300 bg-cyan-50 dark:bg-cyan-950/40 border-cyan-200 dark:border-cyan-800/60',
-  'Consultation Booked':
-    'text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-800/60',
-  'Consultation Completed':
-    'text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/40 border-purple-200 dark:border-purple-800/60',
-  Converted:
-    'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/60',
-  Lost: 'text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800/60',
+const STAGE_DOTS: Record<string, string> = {
+  'New Lead': 'bg-blue-500',
+  Contacted: 'bg-sky-500',
+  'Consultation Booked': 'bg-indigo-500',
+  'Consultation Completed': 'bg-violet-500',
+  Converted: 'bg-emerald-500',
+  Lost: 'bg-rose-500',
 };
-const STAGE_FALLBACK = 'text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800 border-gray-200 dark:border-gray-700';
 
 export const StageBadge: React.FC<{ stage: LeadStage; shape?: 'pill' | 'tag' }> = ({ stage, shape = 'pill' }) => (
   <span
-    className={`inline-block px-2 py-0.5 text-xs font-medium border ${shape === 'pill' ? 'rounded-full' : 'rounded-md'} ${
-      STAGE_STYLES[stage] || STAGE_FALLBACK
+    className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium whitespace-nowrap bg-gray-100 text-gray-700 dark:bg-gray-700/60 dark:text-gray-200 ${
+      shape === 'pill' ? 'rounded-full' : 'rounded-md'
     }`}
   >
+    <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full ${STAGE_DOTS[stage] || 'bg-gray-400'}`} />
     {stage}
   </span>
 );
@@ -59,12 +56,23 @@ export const LeadFlagBadge: React.FC<{ flag?: LeadFlag }> = ({ flag }) => {
   );
 };
 
+// Marks a lead whose consultation has not been recorded yet
+export const NoRecordingBadge: React.FC<{ className?: string }> = ({ className = '' }) => (
+  <span
+    title="No consultation recording yet"
+    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300 ${className}`}
+  >
+    <MicOff className="w-3 h-3" aria-hidden="true" />
+    No recording
+  </span>
+);
+
 export const SectionTitle: React.FC<{ icon: React.ElementType; children: React.ReactNode }> = ({
   icon: Icon,
   children,
 }) => (
-  <h2 className="flex items-center gap-2.5 text-base font-semibold text-gray-900 dark:text-gray-100">
-    <Icon className="w-5 h-5 text-blue-600 dark:text-blue-500 shrink-0" />
+  <h2 className="flex items-center gap-2 text-[15px] font-semibold text-gray-900 dark:text-gray-100">
+    <Icon className="w-4 h-4 text-gray-400 dark:text-gray-500 shrink-0" />
     <span>{children}</span>
   </h2>
 );
@@ -91,7 +99,7 @@ export const chanceTone = (value: number) =>
         key: 'high' as const,
         label: 'High',
         text: 'text-emerald-600 dark:text-emerald-400',
-        pill: 'bg-emerald-600 text-white',
+        pill: 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300',
         bar: 'bg-emerald-500',
       }
     : value >= 50
@@ -99,14 +107,14 @@ export const chanceTone = (value: number) =>
         key: 'moderate' as const,
         label: 'Moderate',
         text: 'text-amber-600 dark:text-amber-400',
-        pill: 'bg-amber-600 text-white',
+        pill: 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300',
         bar: 'bg-amber-500',
       }
     : {
         key: 'low' as const,
         label: 'Low',
         text: 'text-gray-500 dark:text-gray-400',
-        pill: 'bg-gray-500 text-white dark:bg-gray-600',
+        pill: 'bg-gray-100 text-gray-600 ring-1 ring-inset ring-gray-500/15 dark:bg-gray-700/60 dark:text-gray-300',
         bar: 'bg-gray-400 dark:bg-gray-500',
       };
 

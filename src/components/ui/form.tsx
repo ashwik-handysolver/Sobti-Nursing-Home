@@ -38,14 +38,24 @@ export const SearchInput: React.FC<TextInputProps & { wrapperClassName?: string;
 );
 
 // Label stacked above a form control
-export const Field: React.FC<{ label: string; className?: string; children: React.ReactNode }> = ({
-  label,
-  className = '',
-  children,
-}) => (
+export const Field: React.FC<{
+  label: string;
+  className?: string;
+  error?: string | null;
+  action?: React.ReactNode; // shown at the right end of the label row
+  children: React.ReactNode;
+}> = ({ label, className = '', error, action, children }) => (
   <div className={className}>
-    <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">{label}</label>
+    <div className="flex items-baseline justify-between gap-3 mb-1">
+      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300">{label}</label>
+      {action}
+    </div>
     {children}
+    {error && (
+      <p role="alert" className="mt-1 text-xs text-rose-600 dark:text-rose-400">
+        {error}
+      </p>
+    )}
   </div>
 );
 

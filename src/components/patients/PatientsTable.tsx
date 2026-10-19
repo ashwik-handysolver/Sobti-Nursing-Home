@@ -1,7 +1,7 @@
 import React from 'react';
 import { Edit2, Trash2 } from 'lucide-react';
 import { ClientLead } from '../../types/meeting';
-import { Avatar, Button, ConversionBadge, formatRecordingDate, IconButton, LeadFlagBadge, muted, StageBadge } from '../ui';
+import { Avatar, Button, ConversionBadge, formatRecordingDate, IconButton, LeadFlagBadge, muted, NoRecordingBadge, StageBadge } from '../ui';
 
 export type SortField = 'name' | 'conversionChance' | 'lastVisitDate' | 'numericValue';
 export type SortDirection = 'asc' | 'desc';
@@ -69,7 +69,10 @@ export const PatientsTable: React.FC<PatientsTableProps> = ({
                   <div className="flex items-center gap-3">
                     <Avatar name={client.name} />
                     <div className="min-w-0">
-                      <div className="font-medium text-gray-900 dark:text-gray-100 truncate">{client.name}</div>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-medium text-gray-900 dark:text-gray-100 truncate">{client.name}</span>
+                        {client.recordingIds.length === 0 && <NoRecordingBadge className="shrink-0" />}
+                      </div>
                       <div className={`${muted} mt-0.5 truncate`}>{client.procedureName}</div>
                     </div>
                   </div>

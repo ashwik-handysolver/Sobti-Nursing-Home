@@ -3,28 +3,45 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import { Loader2, WifiOff } from 'lucide-react';
 import { MeetingRecording, MeetingTask, LanguageMode, ClientLead } from './types/meeting';
-import { SAMPLE_RECORDINGS } from './data/sampleRecordings';
-import { SAMPLE_CLIENTS } from './data/sampleClients';
+import type { AppUser } from './AuthGate';
+import { deleteLeads, fetchLeads, saveLeads } from './lib/leadsStore';
 import { Sidebar, NavigationPage } from './components/Sidebar';
 import { DashboardView } from './components/views/DashboardView';
 import { PatientsView } from './components/views/PatientsView';
 import { RecordingsListView } from './components/views/RecordingsListView';
 import { FollowUpsView } from './components/views/FollowUpsView';
-import { SettingsView } from './components/views/SettingsView';
-import { InsightsView } from './components/views/InsightsView';
-import { MeetingDetailsView } from './components/views/MeetingDetailsView';
+// Screens that are not needed on first load are fetched when opened
+const MeetingDetailsView = lazy(() =>
+  import('./components/views/MeetingDetailsView').then((m) => ({ default: m.MeetingDetailsView }))
+);
+const InsightsView = lazy(() => import('./components/views/InsightsView').then((m) => ({ default: m.InsightsView })));
+const SettingsView = lazy(() => import('./components/views/SettingsView').then((m) => ({ default: m.SettingsView })));
 import { TopNavbar } from './components/TopNavbar';
-import { UploadDialog } from './components/UploadDialog';
+import { UploadDialog, UploadMode } from './components/UploadDialog';
 import { Toast, ToastMessage } from './components/ui';
-import { clearRecordingAudio, deleteRecordingAudio, loadRecordingAudio } from './utils/audioStore';
+import { deleteRecordingAudio, loadRecordingAudio, saveRecordingAudio } from './utils/audioStore';
+import { clearLegacyAudio, loadLegacyAudio } from './utils/legacyAudioStore';
+import {
+  deleteFollowUps,
+  deleteRecordings,
+  fetchRecordings,
+  followUpEntries,
+  followUpKey,
+  recordingPayload,
+  saveFollowUps,
+  saveRecordings,
+} from './lib/recordingsStore';
 import { buildAnalysisFields, requestAnalysis } from './utils/analyzeRecording';
 import { normalizeLead, withAnalysis } from './utils/leads';
+import { notifyIfAway } from './utils/push';
 
 const STORAGE_KEY_RECORDINGS = 'meetmind_eyecare_recordings_v4';
 const STORAGE_KEY_CLIENTS = 'meetmind_eyecare_clients_v4';
-const STORAGE_KEY_THEME = 'meetmind_theme_v1';
+// v2: earlier versions saved the theme on every visit, so v1 does not tell us what anyone chose
+const STORAGE_KEY_THEME = 'meetmind_theme_v2';
 const STORAGE_KEY_LANG = 'meetmind_default_lang_v1';
 const STORAGE_KEY_SIDEBAR = 'meetmind_sidebar_collapsed_v1';
 
@@ -68,26 +85,12 @@ const isOphthalmicRecording = (r: any): boolean => {
 // Object URLs do not survive a page reload, so they are never persisted
 const stripAudioUrls = (list: MeetingRecording[]) => list.map(({ audioUrl, ...rest }) => rest);
 
-// Sample recordings get their synthetic audio back; uploads are rehydrated from IndexedDB later
-const restoreSampleAudio = (list: MeetingRecording[]): MeetingRecording[] =>
-  list.map(({ audioUrl, ...rest }) => {
-    const sample = SAMPLE_RECORDINGS.find((s) => s.id === rest.id);
-    return {
-      ...rest,
-      audioUrl: sample?.audioUrl,
-      pitchAnalysis: rest.pitchAnalysis || sample?.pitchAnalysis,
-      // Sample recordings saved before the timeline existed pick it up here
-      conversionTimeline: rest.conversionTimeline || sample?.conversionTimeline,
-    };
-  });
-
-export default function App() {
+export default function App({ user, onSignOut }: { user: AppUser; onSignOut: () => void }) {
   // Theme state
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY_THEME);
-      if (saved) return saved === 'dark';
-      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+      // Day mode unless dark mode was switched on here
+      return localStorage.getItem(STORAGE_KEY_THEME) === 'dark';
     } catch {
       return false;
     }
@@ -111,36 +114,11 @@ export default function App() {
   });
 
   // Patients / Client Leads state
-  const [clients, setClients] = useState<ClientLead[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_CLIENTS);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].condition) {
-          return parsed.map(normalizeLead);
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to load clients from localStorage:', e);
-    }
-    return SAMPLE_CLIENTS;
-  });
+  const [clients, setClients] = useState<ClientLead[]>([]);
+  const [leadsError, setLeadsError] = useState<string | null>(null);
 
   // Recordings state
-  const [recordings, setRecordings] = useState<MeetingRecording[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_RECORDINGS);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0 && parsed.every(isOphthalmicRecording)) {
-          return restoreSampleAudio(parsed);
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to load recordings from localStorage:', e);
-    }
-    return SAMPLE_RECORDINGS;
-  });
+  const [recordings, setRecordings] = useState<MeetingRecording[]>([]);
 
   // Navigation state
   const [activePage, setActivePage] = useState<NavigationPage>('dashboard');
@@ -157,6 +135,19 @@ export default function App() {
 
   // Toast with optional undo
   const [toast, setToast] = useState<ToastMessage | null>(null);
+
+  // Saves that failed while offline are retried when the connection returns
+  const [isOnline, setIsOnline] = useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
+  useEffect(() => {
+    const goOnline = () => setIsOnline(true);
+    const goOffline = () => setIsOnline(false);
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => {
+      window.removeEventListener('online', goOnline);
+      window.removeEventListener('offline', goOffline);
+    };
+  }, []);
   const toastTimerRef = useRef<number | null>(null);
   const pendingAudioDeletesRef = useRef<Record<string, number>>({});
 
@@ -177,53 +168,165 @@ export default function App() {
       document.documentElement.classList.add('dark');
       document.documentElement.setAttribute('data-theme', 'dark');
       document.body.classList.add('dark');
-      localStorage.setItem(STORAGE_KEY_THEME, 'dark');
     } else {
       document.documentElement.classList.remove('dark');
       document.documentElement.setAttribute('data-theme', 'light');
       document.body.classList.remove('dark');
-      localStorage.setItem(STORAGE_KEY_THEME, 'light');
     }
   }, [isDarkMode]);
 
-  // Sync recordings to localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_RECORDINGS, JSON.stringify(stripAudioUrls(recordings)));
-    } catch (e) {
-      console.warn('Failed to save recordings to localStorage:', e);
-    }
-  }, [recordings]);
+  // Recordings and their follow-ups live in Supabase: load them once (moving over anything an
+  // earlier version saved in this browser), then mirror every change back
+  const [recordingsLoaded, setRecordingsLoaded] = useState(false);
+  const syncedRecordingsRef = useRef<Map<string, string>>(new Map());
+  const syncedFollowUpsRef = useRef<Map<string, string>>(new Map());
+  // Writes run one after another so a delete and a quick undo reach the database in order
+  const recordingsSyncQueueRef = useRef<Promise<void>>(Promise.resolve());
 
-  // Rehydrate audio for uploaded recordings from IndexedDB
+  const markRecordingsSynced = (list: MeetingRecording[]) => {
+    syncedRecordingsRef.current = new Map(list.map((r) => [r.id, JSON.stringify(recordingPayload(r))]));
+    syncedFollowUpsRef.current = new Map(followUpEntries(list).map((e) => [e.task.id, followUpKey(e)]));
+  };
+
   useEffect(() => {
     let cancelled = false;
-    recordings
-      .filter((r) => !r.audioUrl)
-      .forEach(async (r) => {
-        const audio = await loadRecordingAudio(r.id);
-        if (!audio || cancelled) return;
-        const audioUrl = URL.createObjectURL(audio);
-        setRecordings((prev) =>
-          prev.map((rec) => (rec.id === r.id && !rec.audioUrl ? { ...rec, audioUrl } : rec))
-        );
+
+    const readLegacyRecordings = (): MeetingRecording[] => {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY_RECORDINGS) || '[]');
+        return Array.isArray(parsed)
+          ? parsed.filter((r: MeetingRecording) => r && r.id && !r.isDemo && !r.id.startsWith('rec-sample-'))
+          : [];
+      } catch {
+        return [];
+      }
+    };
+
+    (async () => {
+      try {
+        const fromDb = await fetchRecordings();
+        const legacy = readLegacyRecordings().filter((r) => !fromDb.some((d) => d.id === r.id));
+
+        const moved: MeetingRecording[] = [];
+        if (legacy.length > 0) {
+          for (const r of legacy) {
+            const audio = await loadLegacyAudio(r.id);
+            const audioPath = audio ? await saveRecordingAudio(r.id, audio) : undefined;
+            moved.push({ ...r, audioPath, audioUrl: audio ? URL.createObjectURL(audio) : undefined });
+          }
+          await saveRecordings(moved);
+          await saveFollowUps(followUpEntries(moved));
+        }
+        // The browser copy is only removed once the database has it
+        try {
+          localStorage.removeItem(STORAGE_KEY_RECORDINGS);
+        } catch {}
+        await clearLegacyAudio();
+
+        if (cancelled) return;
+        const all = [...moved, ...fromDb];
+        markRecordingsSynced(all);
+        setRecordings(all);
+        setRecordingsLoaded(true);
+        if (moved.length > 0) {
+          showToast(`Moved ${moved.length} recording${moved.length === 1 ? '' : 's'} from this browser to the database`);
+        }
+      } catch (err: any) {
+        console.error('Failed to load recordings:', err);
+        if (!cancelled) setLeadsError(err?.message || 'Could not load recordings from the database.');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!recordingsLoaded) return;
+    const recSynced = syncedRecordingsRef.current;
+    const fuSynced = syncedFollowUpsRef.current;
+
+    const changedRecordings = recordings.filter((r) => recSynced.get(r.id) !== JSON.stringify(recordingPayload(r)));
+    const removedRecordings = [...recSynced.keys()].filter((id) => !recordings.some((r) => r.id === id));
+    const entries = followUpEntries(recordings);
+    const changedFollowUps = entries.filter((e) => fuSynced.get(e.task.id) !== followUpKey(e));
+    const removedFollowUps = [...fuSynced.keys()].filter((id) => !entries.some((e) => e.task.id === id));
+    if (
+      changedRecordings.length + removedRecordings.length + changedFollowUps.length + removedFollowUps.length ===
+      0
+    ) {
+      return;
+    }
+
+    markRecordingsSynced(recordings);
+    recordingsSyncQueueRef.current = recordingsSyncQueueRef.current.then(async () => {
+      try {
+        // A recording must exist before its follow-ups; deleting a recording also removes its follow-ups
+        await saveRecordings(changedRecordings);
+        await saveFollowUps(changedFollowUps);
+        await deleteFollowUps(removedFollowUps);
+        await deleteRecordings(removedRecordings);
+      } catch (err: any) {
+        console.error('Failed to save recordings:', err);
+        // Forget what was sent so the next change retries it
+        changedRecordings.forEach((r) => syncedRecordingsRef.current.delete(r.id));
+        changedFollowUps.forEach((e) => syncedFollowUpsRef.current.delete(e.task.id));
+        showToast(`Could not save to the database: ${err?.message || 'unknown error'}`);
+      }
+    });
+  }, [recordings, recordingsLoaded, isOnline]);
+
+  // Leads live in Supabase: load them once, then mirror every change back
+  const [leadsLoaded, setLeadsLoaded] = useState(false);
+  const syncedLeadsRef = useRef<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    let cancelled = false;
+    // Patient details used to be kept in this browser; the database is now the only copy
+    try {
+      localStorage.removeItem(STORAGE_KEY_CLIENTS);
+    } catch {}
+    fetchLeads()
+      .then((leads) => {
+        if (cancelled) return;
+        syncedLeadsRef.current = new Map(leads.map((l) => [l.id, JSON.stringify(l)]));
+        setClients(leads);
+        setLeadsLoaded(true);
+      })
+      .catch((err) => {
+        console.error('Failed to load leads:', err);
+        if (!cancelled) setLeadsError(err?.message || 'Could not load patients from the database.');
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // Sync clients to localStorage
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_CLIENTS, JSON.stringify(clients));
-    } catch (e) {
-      console.warn('Failed to save clients to localStorage:', e);
-    }
-  }, [clients]);
+    if (!leadsLoaded) return;
+    const synced = syncedLeadsRef.current;
+    const changed = clients.filter((c) => synced.get(c.id) !== JSON.stringify(c));
+    const removed = [...synced.keys()].filter((id) => !clients.some((c) => c.id === id));
+    if (changed.length === 0 && removed.length === 0) return;
 
+    syncedLeadsRef.current = new Map(clients.map((c) => [c.id, JSON.stringify(c)]));
+    Promise.all([saveLeads(changed), deleteLeads(removed)]).catch((err) => {
+      console.error('Failed to save leads:', err);
+      // Forget what was sent so the next change retries it
+      changed.forEach((c) => synced.delete(c.id));
+      showToast(`Could not save to the database: ${err?.message || 'unknown error'}`);
+    });
+  }, [clients, leadsLoaded, isOnline]);
+
+  // Only an explicit switch is remembered
   const handleToggleDarkMode = () => {
-    setIsDarkMode((prev) => !prev);
+    setIsDarkMode((prev) => {
+      try {
+        localStorage.setItem(STORAGE_KEY_THEME, prev ? 'light' : 'dark');
+      } catch {}
+      return !prev;
+    });
   };
 
   const handleToggleSidebar = () => {
@@ -241,8 +344,10 @@ export default function App() {
   };
 
   // Recordings are always uploaded for a specific patient
-  const openUpload = (client: ClientLead) => {
+  const [uploadMode, setUploadMode] = useState<UploadMode>('upload');
+  const openUpload = (client: ClientLead, mode: UploadMode = 'upload') => {
     setPreSelectedClient(client);
+    setUploadMode(mode);
     setIsUploadOpen(true);
   };
 
@@ -264,6 +369,16 @@ export default function App() {
     setActivePage(page);
   };
 
+  // Links such as a reminder notification open a page with ?page=follow-ups
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const page = params.get('page');
+    if (page && page in PAGE_TITLES) {
+      setActivePage(page as NavigationPage);
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  }, []);
+
   const handleSelectRecording = (recordingId: string, transcriptQuery = '') => {
     setTranscriptSearchSeed(transcriptQuery);
     setSelectedRecordingId(recordingId);
@@ -278,6 +393,7 @@ export default function App() {
 
   const handleProcessingSuccess = (newRecording: MeetingRecording) => {
     setRecordings((prev) => [newRecording, ...prev]);
+    notifyIfAway('Analysis ready', newRecording.title, `/?recording=${encodeURIComponent(newRecording.id)}`);
 
     // The lead picks up the new recording along with its estimate, concerns and next step
     if (newRecording.clientId) {
@@ -298,19 +414,6 @@ export default function App() {
 
     closeUpload();
     handleSelectRecording(newRecording.id);
-  };
-
-  const handleResetToClinicalData = () => {
-    setRecordings(SAMPLE_RECORDINGS);
-    setClients(SAMPLE_CLIENTS);
-    setSelectedRecordingId(null);
-    clearRecordingAudio();
-    try {
-      localStorage.setItem(STORAGE_KEY_RECORDINGS, JSON.stringify(stripAudioUrls(SAMPLE_RECORDINGS)));
-      localStorage.setItem(STORAGE_KEY_CLIENTS, JSON.stringify(SAMPLE_CLIENTS));
-    } catch (e) {
-      console.warn('Failed to reset storage:', e);
-    }
   };
 
   const handleDeleteRecording = (recordingId: string) => {
@@ -414,6 +517,7 @@ export default function App() {
       if (previous.clientId) {
         setClients((prev) => prev.map((c) => (c.id === previous.clientId ? withAnalysis(c, fields) : c)));
       }
+      notifyIfAway('Analysis updated', previous.title, `/?recording=${encodeURIComponent(recordingId)}`);
       showToast('Analysis updated', () =>
         setRecordings((prev) => prev.map((r) => (r.id === recordingId ? { ...previous, audioUrl: r.audioUrl } : r)))
       );
@@ -477,6 +581,21 @@ export default function App() {
     );
   };
 
+  const dataReady = leadsLoaded && recordingsLoaded;
+
+  // Notifications link to /?page=… or /?recording=…: open that place once the data is in, then tidy the address
+  const deepLinkHandledRef = useRef(false);
+  useEffect(() => {
+    if (!dataReady || deepLinkHandledRef.current) return;
+    deepLinkHandledRef.current = true;
+    const params = new URLSearchParams(window.location.search);
+    const page = params.get('page') as NavigationPage | null;
+    const recordingId = params.get('recording');
+    if (recordingId && recordings.some((r) => r.id === recordingId)) handleSelectRecording(recordingId);
+    else if (page && ['dashboard', 'patients', 'insights', 'follow-ups', 'recordings', 'settings'].includes(page)) navigateTo(page);
+    if (page || recordingId) window.history.replaceState(null, '', window.location.pathname);
+  }, [dataReady]);
+
   // Currently selected recording object
   const currentRecording = selectedRecordingId
     ? recordings.find((r) => r.id === selectedRecordingId) || null
@@ -505,7 +624,7 @@ export default function App() {
     >
       {/* Sidebar */}
       <Sidebar
-        activePage={currentRecording ? 'recordings' : activePage}
+        activePage={currentRecording || activePage === 'recordings' ? 'patients' : activePage}
         onNavigate={navigateTo}
         pendingTasksCount={pendingTasksCount}
         isDarkMode={isDarkMode}
@@ -527,13 +646,44 @@ export default function App() {
           onToggleTaskStatus={handleGlobalToggleTaskStatus}
           onOpenFollowUps={() => navigateTo('follow-ups')}
           onOpenSettings={() => navigateTo('settings')}
+          user={user}
+          onSignOut={onSignOut}
         />
 
         {/* View Content */}
-        <main className="flex-1 px-4 pt-5 pb-4 sm:px-6 sm:pb-6 lg:px-8 lg:pb-8 max-w-6xl w-full mx-auto">
+        <main className="flex-1 px-3 pt-4 pb-4 sm:px-4 sm:pb-6 lg:pb-8 max-w-[1440px] w-full mx-auto">
+          {!isOnline && (
+            <div role="status" className="mb-4 flex items-center gap-2.5 px-4 py-3 rounded-lg border border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10 text-sm text-gray-800 dark:text-gray-200">
+              <WifiOff className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              You're offline. Changes you make now will be saved when the connection returns.
+            </div>
+          )}
+
+          {leadsError && (
+            <div role="alert" className="mb-4 px-4 py-3 rounded-lg border border-rose-200 dark:border-rose-500/40 bg-rose-50 dark:bg-rose-500/10 text-sm text-rose-800 dark:text-rose-200">
+              Data could not be loaded from the database: {leadsError}. Check that both SQL files in the supabase folder have been run.
+            </div>
+          )}
+
+          {!dataReady && !leadsError && (
+            <div role="status" className="py-24 flex flex-col items-center gap-3 text-sm text-gray-500 dark:text-gray-400">
+              <Loader2 className="w-6 h-6 animate-spin text-blue-600 dark:text-blue-400" />
+              Loading your patients and recordings…
+            </div>
+          )}
+
+          <div className={!dataReady && !leadsError ? 'hidden' : ''}>
+          <Suspense
+            fallback={
+              <div className="py-24 flex justify-center">
+                <Loader2 className="w-6 h-6 animate-spin text-blue-600 dark:text-blue-400" aria-label="Loading" />
+              </div>
+            }
+          >
           {currentRecording ? (
             <MeetingDetailsView
               recording={currentRecording}
+              client={clients.find((c) => c.id === currentRecording.clientId || c.recordingIds.includes(currentRecording.id))}
               onBack={() => setSelectedRecordingId(null)}
               onUpdateRecordingTasks={handleUpdateRecordingTasks}
               onUpdateRecording={handleUpdateRecording}
@@ -578,13 +728,14 @@ export default function App() {
                   initialClientId={selectedPatientIdForView}
                   onClearInitialClientId={() => setSelectedPatientIdForView(null)}
                   onSelectRecording={handleSelectRecording}
-                  onUploadForClient={(client) => openUpload(client)}
+                  onUploadForClient={(client, mode) => openUpload(client, mode)}
                   openNewPatient={openNewPatient}
                   onNewPatientOpened={() => setOpenNewPatient(false)}
                   onAddClient={handleAddClient}
                   onUpdateClient={handleUpdateClient}
                   onDeleteClient={handleDeleteClient}
                   onToggleTaskStatus={handleGlobalToggleTaskStatus}
+                  onOpenRecordings={() => navigateTo('recordings')}
                 />
               )}
 
@@ -609,11 +760,12 @@ export default function App() {
                   onUpdateDefaultLanguage={handleUpdateDefaultLanguage}
                   isDarkMode={isDarkMode}
                   onToggleDarkMode={handleToggleDarkMode}
-                  onResetToClinicalData={handleResetToClinicalData}
                 />
               )}
             </>
           )}
+          </Suspense>
+          </div>
         </main>
       </div>
 
@@ -622,6 +774,7 @@ export default function App() {
           clients={clients}
           defaultLanguage={defaultLanguage}
           preSelectedClient={preSelectedClient}
+          mode={uploadMode}
           onProcessingSuccess={handleProcessingSuccess}
           onClose={closeUpload}
         />

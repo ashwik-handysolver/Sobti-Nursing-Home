@@ -1,6 +1,5 @@
 import React from 'react';
 import {
-  AudioLines,
   Building2,
   CalendarCheck,
   ChevronsLeft,
@@ -48,7 +47,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: CalendarCheck,
       badge: pendingTasksCount > 0 ? pendingTasksCount : undefined,
     },
-    { id: 'recordings', label: 'Recordings', icon: AudioLines },
   ];
 
   // Collapsing only applies on desktop; the mobile drawer always shows labels

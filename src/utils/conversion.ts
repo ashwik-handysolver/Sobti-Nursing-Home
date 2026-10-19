@@ -57,15 +57,76 @@ export const NO_SOURCE = 'Not recorded';
 export const compareTreatments = (clients: ClientLead[]) => compareLeads(clients, treatmentOf);
 export const compareSources = (clients: ClientLead[]) => compareLeads(clients, (c) => c.leadSource || NO_SOURCE);
 
-// How many conversations each kind of concern came up in (counted once per conversation)
-export function countConcerns(recordings: MeetingRecording[]): CountItem[] {
-  const counts = new Map<string, number>();
-  recordings.forEach((r) => {
-    new Set((r.conversionBarriers || []).map((b) => b.category)).forEach((category) => {
-      counts.set(category, (counts.get(category) || 0) + 1);
+export interface RecordingConcern {
+  text: string;
+  category?: string; // the category the analysis filed it under, when it gave one
+  excerpt?: string; // the words from the conversation it was taken from
+}
+
+// The concerns shown for a recording: the analysis's barriers, or failing that its negative
+// factors, or the single hesitation it noted. The recording page and Insights both use this.
+export function concernsOf(recording: MeetingRecording): RecordingConcern[] {
+  if (recording.conversionBarriers && recording.conversionBarriers.length > 0) {
+    return recording.conversionBarriers
+      .filter((b) => b.description)
+      .map((b) => ({ text: b.description, category: b.category, excerpt: b.supportingExcerpt }));
+  }
+  if (recording.conversionFactors?.negative?.length) {
+    return recording.conversionFactors.negative.filter(Boolean).map((text) => ({ text }));
+  }
+  return recording.patientHesitation ? [{ text: recording.patientHesitation }] : [];
+}
+
+// Topics for grouping concerns, decided by what the concern says (most specific first)
+const CONCERN_TOPICS: [string, RegExp][] = [
+  ['Comparing other options', /another (clinic|hospital|centre|center|doctor)|competitor|elsewhere|second opinion|compar|cheaper/i],
+  ['Cost and insurance', /price|pricing|cost|afford|expens|budget|\bemi\b|instal|insurance|tpa|claim|co-?pay|₹|rupee|financ|discount|package/i],
+  ['Recovery and downtime', /recover|downtime|heal|after (the )?surgery|post-?op|restriction|water|bath|screen|driv|\brest\b|back to work|days off/i],
+  ['Medical suitability', /diabet|sugar|eligib|suitab|candidate|cornea|pressure|retina|condition|medical history/i],
+  ['Fear of the procedure', /fear|afraid|scared|anxi|nervous|worr|pain|risk|complication|safe|side effect/i],
+  ['Timing and scheduling', /schedul|timing|availab|appointment|slot|date|travel|time off|leave|wedding|busy/i],
+  ['Needs time or family input', /family|son|daughter|wife|husband|spouse|discuss|think|decide|later|wait|not ready|undecided|hesita|consult/i],
+];
+
+const CATEGORY_TOPICS: Record<string, string> = {
+  'Price / Affordability': 'Cost and insurance',
+  'Procedure Hesitation': 'Fear of the procedure',
+  'Timing / Availability': 'Timing and scheduling',
+  'Information Request': 'Questions left unanswered',
+  'Unanswered Questions': 'Questions left unanswered',
+  'Unclear Next Step': 'Questions left unanswered',
+};
+
+export const concernTopic = (concern: RecordingConcern): string =>
+  CONCERN_TOPICS.find(([, pattern]) => pattern.test(concern.text))?.[0] ||
+  (concern.category && CATEGORY_TOPICS[concern.category]) ||
+  'Other concerns';
+
+export interface ConcernTopicCount extends CountItem {
+  examples: string[]; // the concerns themselves, newest first
+}
+
+// How many conversations each topic of concern came up in (counted once per conversation)
+export function countConcerns(recordings: MeetingRecording[]): ConcernTopicCount[] {
+  const topics = new Map<string, { value: number; examples: string[] }>();
+  [...recordings]
+    .sort((a, b) => b.uploadDate.localeCompare(a.uploadDate))
+    .forEach((r) => {
+      const byTopic = new Map<string, string[]>();
+      concernsOf(r).forEach((c) => {
+        const topic = concernTopic(c);
+        byTopic.set(topic, [...(byTopic.get(topic) || []), c.text]);
+      });
+      byTopic.forEach((texts, topic) => {
+        const entry = topics.get(topic) || { value: 0, examples: [] };
+        entry.value += 1;
+        texts.forEach((t) => !entry.examples.includes(t) && entry.examples.push(t));
+        topics.set(topic, entry);
+      });
     });
-  });
-  return [...counts.entries()].map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+  return [...topics.entries()]
+    .map(([label, { value, examples }]) => ({ label, value, examples }))
+    .sort((a, b) => b.value - a.value);
 }
 
 export interface ConversionOverview {
@@ -81,6 +142,11 @@ export interface ConversionOverview {
   dropOff: CountItem[]; // lost leads, by the stage they were lost at
   lossReasons: CountItem[]; // lost leads, by why they did not proceed (most common first)
   lossInsight: string | null; // one sentence on the leading reason
+  openLeads: number;
+  pipelineValue: number; // ₹ of leads still open
+  wonValue: number; // ₹ of converted leads
+  lostValue: number; // ₹ of lost leads
+  lostValueByReason: Record<string, number>;
 }
 
 // How each reason reads after "lost …" in a sentence
@@ -127,6 +193,7 @@ export function buildConversionOverview(clients: ClientLead[], maxTreatments = 4
   const month = new Date().toISOString().slice(0, 7);
   const converted = clients.filter((c) => c.stage === 'Converted').length;
   const lostLeads = clients.filter((c) => c.stage === 'Lost');
+  const open = clients.filter((c) => c.stage !== 'Converted' && c.stage !== 'Lost');
 
   const counts = new Map<string, number>();
   clients.forEach((c) => counts.set(treatmentOf(c), (counts.get(treatmentOf(c)) || 0) + 1));
@@ -163,5 +230,81 @@ export function buildConversionOverview(clients: ClientLead[], maxTreatments = 4
       }))
       .sort((a, b) => b.value - a.value),
     lossInsight: describeTopLoss(lostLeads, month),
+    openLeads: open.length,
+    pipelineValue: sumValue(open),
+    wonValue: sumValue(clients.filter((c) => c.stage === 'Converted')),
+    lostValue: sumValue(lostLeads),
+    lostValueByReason: lostLeads.reduce<Record<string, number>>((acc, c) => {
+      const reason = c.lostReason || 'Unknown';
+      acc[reason] = (acc[reason] || 0) + (c.numericValue || 0);
+      return acc;
+    }, {}),
   };
 }
+
+const sumValue = (leads: ClientLead[]) => leads.reduce((sum, c) => sum + (c.numericValue || 0), 0);
+
+// ---------- Time periods (leads are counted by the day they came in) ----------
+
+export type PeriodId = 'month' | 'last-month' | '90d' | 'all';
+
+export const PERIOD_OPTIONS: { id: PeriodId; label: string }[] = [
+  { id: 'month', label: 'This month' },
+  { id: 'last-month', label: 'Last month' },
+  { id: '90d', label: '90 days' },
+  { id: 'all', label: 'All time' },
+];
+
+const localISO = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+export function inPeriod(iso: string | undefined, period: PeriodId): boolean {
+  if (period === 'all') return true;
+  if (!iso) return false;
+  const day = iso.slice(0, 10);
+  const now = new Date();
+  if (period === 'month') return day.slice(0, 7) === localISO(now).slice(0, 7);
+  if (period === 'last-month') return day.slice(0, 7) === localISO(new Date(now.getFullYear(), now.getMonth() - 1, 1)).slice(0, 7);
+  const start = new Date(now);
+  start.setDate(start.getDate() - 89);
+  return day >= localISO(start);
+}
+
+export const leadsInPeriod = (clients: ClientLead[], period: PeriodId) =>
+  clients.filter((c) => inPeriod(c.createdDate, period));
+
+// ---------- How well the AI's estimate predicted the outcome ----------
+
+export interface AccuracyRow {
+  label: string;
+  leads: number; // decided leads (converted or lost) the AI had rated in this band
+  converted: number;
+  rate: number | null; // percent that actually converted
+}
+
+export function estimateAccuracy(clients: ClientLead[]): AccuracyRow[] {
+  const decided = clients.filter(
+    (c) => (c.stage === 'Converted' || c.stage === 'Lost') && Number.isFinite(c.conversionChance)
+  );
+  const bands: [string, (v: number) => boolean][] = [
+    ['Rated 75% or higher', (v) => v >= 75],
+    ['Rated 50–74%', (v) => v >= 50 && v < 75],
+    ['Rated under 50%', (v) => v < 50],
+  ];
+  return bands.map(([label, test]) => {
+    const leads = decided.filter((c) => test(c.conversionChance));
+    const converted = leads.filter((c) => c.stage === 'Converted').length;
+    return { label, leads: leads.length, converted, rate: leads.length ? Math.round((converted / leads.length) * 100) : null };
+  });
+}
+
+// What patients who were eventually lost worried about, by topic
+export function concernsAmongLost(clients: ClientLead[], recordings: MeetingRecording[]) {
+  const lost = clients.filter((c) => c.stage === 'Lost');
+  const ids = new Set(lost.map((c) => c.id));
+  const recordingIds = new Set(lost.flatMap((c) => c.recordingIds || []));
+  return countConcerns(recordings.filter((r) => (r.clientId && ids.has(r.clientId)) || recordingIds.has(r.id)));
+}
+
+export const compareDoctors = (clients: ClientLead[]) =>
+  compareLeads(clients, (c) => (c.assignedDoctor || 'Not assigned').split('(')[0].trim());

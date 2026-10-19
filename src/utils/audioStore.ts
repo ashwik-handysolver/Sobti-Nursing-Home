@@ -1,49 +1,37 @@
-// Persists uploaded recording audio in IndexedDB so playback survives page reloads
-// (object URLs die with the page and audio is too large for localStorage)
-const DB_NAME = 'meetmind_audio_v1';
-const STORE_NAME = 'recordings';
+import { supabase } from '../lib/supabase';
 
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
-    request.onupgradeneeded = () => {
-      request.result.createObjectStore(STORE_NAME);
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
+// Recording audio lives in the private `recording-audio` bucket (see supabase/recordings.sql),
+// at <user id>/<recording id>, so storage rules can limit each user to their own folder.
+const BUCKET = 'recording-audio';
+const SIGNED_URL_SECONDS = 12 * 60 * 60;
+
+const db = () => {
+  if (!supabase) throw new Error('Supabase is not configured.');
+  return supabase;
+};
+
+async function audioPath(recordingId: string): Promise<string> {
+  const { data } = await db().auth.getSession();
+  const userId = data.session?.user.id;
+  if (!userId) throw new Error('You are signed out. Log in again to save audio.');
+  return `${userId}/${recordingId}`;
 }
 
-async function withStore<T>(
-  mode: IDBTransactionMode,
-  run: (store: IDBObjectStore) => IDBRequest<T>
-): Promise<T> {
-  const db = await openDb();
-  try {
-    return await new Promise<T>((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, mode);
-      const request = run(tx.objectStore(STORE_NAME));
-      tx.oncomplete = () => resolve(request.result);
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
-    });
-  } finally {
-    db.close();
-  }
-}
-
-export async function saveRecordingAudio(recordingId: string, audio: Blob): Promise<void> {
-  try {
-    await withStore('readwrite', (store) => store.put(audio, recordingId));
-  } catch (err) {
-    console.warn('Could not persist recording audio:', err);
-  }
+// Uploads the audio and returns where it was stored
+export async function saveRecordingAudio(recordingId: string, audio: Blob): Promise<string> {
+  const path = await audioPath(recordingId);
+  const { error } = await db()
+    .storage.from(BUCKET)
+    .upload(path, audio, { upsert: true, contentType: audio.type || 'application/octet-stream' });
+  if (error) throw new Error(`The audio could not be saved: ${error.message}`);
+  return path;
 }
 
 export async function loadRecordingAudio(recordingId: string): Promise<Blob | null> {
   try {
-    const audio = await withStore<Blob | undefined>('readonly', (store) => store.get(recordingId));
-    return audio || null;
+    const { data, error } = await db().storage.from(BUCKET).download(await audioPath(recordingId));
+    if (error) throw error;
+    return data;
   } catch (err) {
     console.warn('Could not load recording audio:', err);
     return null;
@@ -52,16 +40,22 @@ export async function loadRecordingAudio(recordingId: string): Promise<Blob | nu
 
 export async function deleteRecordingAudio(recordingId: string): Promise<void> {
   try {
-    await withStore('readwrite', (store) => store.delete(recordingId));
+    const { error } = await db().storage.from(BUCKET).remove([await audioPath(recordingId)]);
+    if (error) throw error;
   } catch (err) {
     console.warn('Could not delete recording audio:', err);
   }
 }
 
-export async function clearRecordingAudio(): Promise<void> {
-  try {
-    await withStore('readwrite', (store) => store.clear());
-  } catch (err) {
-    console.warn('Could not clear recording audio:', err);
+// Temporary playback links for stored audio, keyed by storage path
+export async function signedAudioUrls(paths: string[]): Promise<Record<string, string>> {
+  if (paths.length === 0) return {};
+  const { data, error } = await db().storage.from(BUCKET).createSignedUrls(paths, SIGNED_URL_SECONDS);
+  if (error) {
+    console.warn('Could not create audio links:', error);
+    return {};
   }
+  return Object.fromEntries(
+    (data || []).filter((d) => d.signedUrl && d.path).map((d) => [d.path as string, d.signedUrl])
+  );
 }

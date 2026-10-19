@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Plus, Users } from 'lucide-react';
+import { AudioLines, Plus, Users } from 'lucide-react';
 import { ClientLead, MeetingRecording } from '../../types/meeting';
 import { Button, Card, Dropdown, EmptyState, muted, PageHeader, SearchInput } from '../ui';
 import { LEAD_FLAGS, LEAD_STAGES } from '../../utils/leads';
@@ -16,11 +16,12 @@ interface PatientsViewProps {
   onNewPatientOpened?: () => void;
   onClearInitialClientId?: () => void;
   onSelectRecording: (recordingId: string) => void;
-  onUploadForClient: (client: ClientLead) => void;
+  onUploadForClient: (client: ClientLead, mode?: 'upload' | 'record') => void;
   onAddClient: (newClient: ClientLead) => void;
   onUpdateClient: (updatedClient: ClientLead) => void;
   onDeleteClient: (clientId: string) => void;
   onToggleTaskStatus?: (taskId: string) => void;
+  onOpenRecordings?: () => void; // the list of every recording
 }
 
 const PAGE_SIZE = 10;
@@ -41,6 +42,7 @@ export const PatientsView: React.FC<PatientsViewProps> = ({
   onUpdateClient,
   onDeleteClient,
   onToggleTaskStatus,
+  onOpenRecordings,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [stageFilter, setStageFilter] = useState<string>('all');
@@ -154,16 +156,24 @@ export const PatientsView: React.FC<PatientsViewProps> = ({
           }}
           onUpdate={onUpdateClient}
           onSelectRecording={onSelectRecording}
-          onUploadRecording={() => onUploadForClient(selectedClient)}
+          onUploadRecording={(mode) => onUploadForClient(selectedClient, mode)}
           onToggleTaskStatus={onToggleTaskStatus}
         />
       ) : (
         <div className="space-y-5">
           <PageHeader title="Leads">
+            <div className="flex items-center gap-2">
+              {onOpenRecordings && (
+                <Button variant="outline" onClick={onOpenRecordings}>
+                  <AudioLines className="w-4 h-4" />
+                  <span>All recordings</span>
+                </Button>
+              )}
             <Button onClick={() => setForm({ mode: 'new' })}>
               <Plus className="w-4 h-4" />
               <span>New patient</span>
             </Button>
+            </div>
           </PageHeader>
 
           {clients.length === 0 ? (
@@ -232,6 +242,11 @@ export const PatientsView: React.FC<PatientsViewProps> = ({
           }
           onSave={handleSavePatient}
           onClose={() => setForm({ mode: 'closed' })}
+          existingClients={clients}
+          onOpenExisting={(id) => {
+            setForm({ mode: 'closed' });
+            setSelectedClientId(id);
+          }}
         />
       )}
     </div>

@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { ArrowLeft, ArrowRight, AudioLines, CalendarCheck, Edit2, Trash2, UploadCloud } from 'lucide-react';
+import { ArrowLeft, ArrowRight, AudioLines, CalendarCheck, Edit2, Mic, Trash2, UploadCloud } from 'lucide-react';
 import { ClientLead, MeetingRecording } from '../../types/meeting';
 import { suggestLostReason } from '../../utils/lostReasons';
 import { describeDue } from '../../utils/tasks';
@@ -14,6 +14,7 @@ import {
   IconButton,
   LeadFlagBadge,
   muted,
+  NoRecordingBadge,
   SectionTitle,
   StageBadge,
   TaskRow,
@@ -27,7 +28,7 @@ interface PatientProfileProps {
   onDelete: () => void;
   onUpdate: (client: ClientLead) => void;
   onSelectRecording: (recordingId: string) => void;
-  onUploadRecording: () => void;
+  onUploadRecording: (mode: 'upload' | 'record') => void;
   onToggleTaskStatus?: (taskId: string) => void;
 }
 
@@ -98,6 +99,7 @@ export const PatientProfile: React.FC<PatientProfileProps> = ({
                 <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">{client.name}</h1>
                 <StageBadge stage={client.stage} shape="tag" />
                 <LeadFlagBadge flag={client.flag} />
+                {clientRecordings.length === 0 && <NoRecordingBadge />}
               </div>
               <p className="text-sm text-gray-700 dark:text-gray-300 mt-1">{client.condition}</p>
               <p className={`${muted} mt-1`}>
@@ -114,7 +116,26 @@ export const PatientProfile: React.FC<PatientProfileProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => onUploadRecording('record')}
+              title="Record consultation"
+              aria-label="Record consultation"
+              className="w-9 h-9 rounded-full flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-600/30 transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+            >
+              <Mic className="w-[18px] h-[18px]" strokeWidth={2.5} />
+            </button>
+            <button
+              type="button"
+              onClick={() => onUploadRecording('upload')}
+              title="Upload recording"
+              aria-label="Upload recording"
+              className="w-9 h-9 rounded-full flex items-center justify-center bg-blue-50 hover:bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:hover:bg-blue-500/25 dark:text-blue-300 ring-1 ring-blue-200 dark:ring-blue-500/30 transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500"
+            >
+              <UploadCloud className="w-[18px] h-[18px]" strokeWidth={2.5} />
+            </button>
+            <span aria-hidden="true" className="w-px h-6 mx-1 bg-gray-200 dark:bg-gray-700" />
             <IconButton onClick={onEdit} title="Edit patient" aria-label="Edit patient">
               <Edit2 className="w-4 h-4" />
             </IconButton>
@@ -200,11 +221,7 @@ export const PatientProfile: React.FC<PatientProfileProps> = ({
           <SectionTitle icon={AudioLines}>Recordings</SectionTitle>
           {clientRecordings.length === 0 ? (
             <div className="py-4">
-              <p className={muted}>No recording was uploaded when this patient was added.</p>
-              <Button onClick={onUploadRecording} className="mt-3">
-                <UploadCloud className="w-4 h-4" />
-                <span>Upload recording</span>
-              </Button>
+              <p className={muted}>No consultation has been recorded for this patient yet.</p>
             </div>
           ) : (
             <div className="mt-1 divide-y divide-gray-100 dark:divide-gray-700/60">
