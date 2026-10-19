@@ -273,31 +273,6 @@ export function inPeriod(iso: string | undefined, period: PeriodId): boolean {
 export const leadsInPeriod = (clients: ClientLead[], period: PeriodId) =>
   clients.filter((c) => inPeriod(c.createdDate, period));
 
-// ---------- How well the AI's estimate predicted the outcome ----------
-
-export interface AccuracyRow {
-  label: string;
-  leads: number; // decided leads (converted or lost) the AI had rated in this band
-  converted: number;
-  rate: number | null; // percent that actually converted
-}
-
-export function estimateAccuracy(clients: ClientLead[]): AccuracyRow[] {
-  const decided = clients.filter(
-    (c) => (c.stage === 'Converted' || c.stage === 'Lost') && Number.isFinite(c.conversionChance)
-  );
-  const bands: [string, (v: number) => boolean][] = [
-    ['Rated 75% or higher', (v) => v >= 75],
-    ['Rated 50–74%', (v) => v >= 50 && v < 75],
-    ['Rated under 50%', (v) => v < 50],
-  ];
-  return bands.map(([label, test]) => {
-    const leads = decided.filter((c) => test(c.conversionChance));
-    const converted = leads.filter((c) => c.stage === 'Converted').length;
-    return { label, leads: leads.length, converted, rate: leads.length ? Math.round((converted / leads.length) * 100) : null };
-  });
-}
-
 // What patients who were eventually lost worried about, by topic
 export function concernsAmongLost(clients: ClientLead[], recordings: MeetingRecording[]) {
   const lost = clients.filter((c) => c.stage === 'Lost');
@@ -305,6 +280,3 @@ export function concernsAmongLost(clients: ClientLead[], recordings: MeetingReco
   const recordingIds = new Set(lost.flatMap((c) => c.recordingIds || []));
   return countConcerns(recordings.filter((r) => (r.clientId && ids.has(r.clientId)) || recordingIds.has(r.id)));
 }
-
-export const compareDoctors = (clients: ClientLead[]) =>
-  compareLeads(clients, (c) => (c.assignedDoctor || 'Not assigned').split('(')[0].trim());

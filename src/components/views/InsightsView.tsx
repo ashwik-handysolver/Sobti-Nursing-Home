@@ -1,14 +1,12 @@
 import React, { useMemo } from 'react';
-import { Gauge, Megaphone, Route, Stethoscope, Target, UserX } from 'lucide-react';
+import { Megaphone, Route, Target, UserX } from 'lucide-react';
 import { ClientLead, MeetingRecording } from '../../types/meeting';
 import {
   buildConversionOverview,
-  compareDoctors,
   compareSources,
   compareTreatments,
   ComparisonRow,
   concernsAmongLost,
-  estimateAccuracy,
   leadsInPeriod,
   NO_SOURCE,
   PERIOD_OPTIONS,
@@ -24,7 +22,6 @@ import {
   formatRecordingDate,
   FunnelSteps,
   MeterList,
-  muted,
   PageHeader,
   Panel,
   SegmentedControl,
@@ -59,14 +56,11 @@ export const InsightsView: React.FC<InsightsViewProps> = ({ clients, recordings,
   const overview = useMemo(() => buildConversionOverview(leads), [leads]);
   const treatments = useMemo(() => compareTreatments(leads), [leads]);
   const sources = useMemo(() => compareSources(leads), [leads]);
-  const doctors = useMemo(() => compareDoctors(leads), [leads]);
-  const accuracy = useMemo(() => estimateAccuracy(leads), [leads]);
   const lostConcerns = useMemo(() => concernsAmongLost(leads, recordings), [leads, recordings]);
   const lostLeads = useMemo(
     () => leads.filter((c) => c.stage === 'Lost').sort((a, b) => (b.lostDate || '').localeCompare(a.lostDate || '')),
     [leads]
   );
-  const decidedWithEstimate = accuracy.reduce((sum, row) => sum + row.leads, 0);
 
   if (clients.length === 0) {
     return (
@@ -120,33 +114,6 @@ export const InsightsView: React.FC<InsightsViewProps> = ({ clients, recordings,
             <LossReasonsCard overview={overview} concerns={lostConcerns} />
             <Panel title="Where leads drop off" icon={Route}>
               <FunnelSteps steps={overview.funnel} />
-            </Panel>
-          </div>
-
-          {/* Who converts, and how far to trust the estimate */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-            <Panel title="Conversion by doctor" icon={Stethoscope}>
-              <MeterList rows={conversionRows(doctors)} />
-            </Panel>
-            <Panel
-              title="How accurate is the AI estimate?"
-              icon={Gauge}
-            >
-              {decidedWithEstimate === 0 ? (
-                <p className={muted}>
-                  This fills in once leads with a conversion estimate are marked converted or lost.
-                </p>
-              ) : (
-                <MeterList
-                  rows={accuracy.map((row) => ({
-                    label: row.label,
-                    percent: row.rate ?? 0,
-                    value: row.rate === null ? '—' : `${row.rate}%`,
-                    detail: row.leads ? `${row.converted} of ${plural(row.leads, 'lead')} converted` : 'No decided leads yet',
-                    tone: row.rate === null ? 'muted' : 'brand',
-                  }))}
-                />
-              )}
             </Panel>
           </div>
 
