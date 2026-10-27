@@ -11,6 +11,8 @@ import {
   X,
 } from 'lucide-react';
 import { Logo, SwitchTrack } from './ui';
+import { ReferButton } from './ReferButton';
+import type { AppUser } from '../AuthGate';
 
 export type NavigationPage = 'dashboard' | 'patients' | 'insights' | 'follow-ups' | 'recordings' | 'settings';
 
@@ -24,6 +26,7 @@ interface SidebarProps {
   onCloseMobile: () => void;
   isCollapsed: boolean;
   onToggleCollapsed: () => void;
+  user: AppUser;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -36,6 +39,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCloseMobile,
   isCollapsed,
   onToggleCollapsed,
+  user,
 }) => {
   const navItems: { id: NavigationPage; label: string; icon: React.ElementType; badge?: number }[] = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutGrid },
@@ -119,6 +123,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </nav>
         </div>
 
+        <div className="space-y-3">
+        <ReferButton user={user} isCollapsed={isCollapsed} />
         <div className="pt-4 border-t border-gray-200 dark:border-gray-700 space-y-1">
           <div className={footerRow} title={isCollapsed ? 'Ophthalmology Clinic' : undefined}>
             <Building2 className="w-5 h-5 shrink-0" />
@@ -149,6 +155,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {isCollapsed ? <ChevronsRight className="w-5 h-5 shrink-0" /> : <ChevronsLeft className="w-5 h-5 shrink-0" />}
             <span className={label}>Collapse</span>
           </button>
+        </div>
         </div>
       </aside>
     </>

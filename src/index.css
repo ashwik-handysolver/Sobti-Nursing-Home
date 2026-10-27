@@ -71,3 +71,52 @@ body:not(.dark) {
 .dark ::-webkit-scrollbar-thumb {
   background: rgba(71, 85, 105, 0.5);
 }
+
+/* Refer & earn button (Sidebar): sheen, gift hop and sparkles on hover */
+.refer-button::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(110deg, transparent 30%, rgb(255 255 255 / 0.28) 50%, transparent 70%);
+  transform: translateX(-120%);
+  pointer-events: none;
+}
+.refer-button:hover::before {
+  animation: refer-sheen 0.7s ease-out;
+}
+.refer-button:hover .refer-gift {
+  animation: refer-hop 0.5s ease-out;
+}
+.refer-sparkle {
+  position: absolute;
+  left: calc(50% + var(--sparkle-x) - var(--sparkle-size) / 2);
+  top: calc(50% + var(--sparkle-y) - var(--sparkle-size) / 2);
+  width: var(--sparkle-size);
+  height: var(--sparkle-size);
+  background: #fff;
+  clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%);
+  opacity: 0;
+  transform: scale(0);
+}
+.refer-button:hover .refer-sparkle {
+  animation: refer-twinkle 0.55s ease-out var(--sparkle-delay) both;
+}
+@keyframes refer-sheen {
+  to { transform: translateX(120%); }
+}
+@keyframes refer-hop {
+  0%, 100% { transform: translateY(0) rotate(0); }
+  40% { transform: translateY(-3px) rotate(-8deg); }
+  70% { transform: translateY(0) rotate(4deg); }
+}
+@keyframes refer-twinkle {
+  0% { opacity: 0; transform: scale(0) rotate(0); }
+  50% { opacity: 1; transform: scale(1) rotate(45deg); }
+  100% { opacity: 0; transform: scale(0.4) rotate(90deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .refer-button:hover::before,
+  .refer-button:hover .refer-gift,
+  .refer-button:hover .refer-sparkle { animation: none; }
+}

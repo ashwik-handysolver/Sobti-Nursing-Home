@@ -633,6 +633,7 @@ export default function App({ user, onSignOut }: { user: AppUser; onSignOut: () 
         onCloseMobile={() => setIsMobileMenuOpen(false)}
         isCollapsed={isSidebarCollapsed}
         onToggleCollapsed={handleToggleSidebar}
+        user={user}
       />
 
       {/* Main Content Area */}
