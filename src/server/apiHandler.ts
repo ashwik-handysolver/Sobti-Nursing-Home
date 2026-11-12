@@ -1,4 +1,4 @@
-import { GoogleGenAI, FileState, createPartFromUri } from '@google/genai';
+﻿import { GoogleGenAI, FileState, createPartFromUri } from '@google/genai';
 import type { IncomingMessage, ServerResponse } from 'http';
 import { ANALYSIS_SCHEMA } from './analysisSchema.js';
 
@@ -82,7 +82,7 @@ function describeGeminiError(err: any, fallback: string): string {
     return 'The Gemini API key has run out of quota. Check your plan and billing with Google.';
   }
   if (/NOT_FOUND|is not found|not supported/i.test(message)) {
-    return `The model "${MODEL}" is not available for this API key.`;
+    return `The Gemini model is not available for this API key (${message.slice(0, 200)}). Check GEMINI_FALLBACK_MODEL and the model name.`;
   }
   return message || fallback;
 }
