@@ -2,7 +2,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { ANALYSIS_SCHEMA } from './analysisSchema.js';
 
-const MODEL = 'gemini-3.8-flash';
+const MODEL = 'Gemini 2.5 Flash';
 // Optional second model to try when the main one stays overloaded, e.g. GEMINI_FALLBACK_MODEL=gemini-2.5-flash
 const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL?.trim() || '';
 
