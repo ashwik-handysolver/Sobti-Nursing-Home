@@ -18,13 +18,22 @@ function isTemporaryGeminiError(err: any): boolean {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Retries temporary failures with growing pauses (about 2, 4 and 8 seconds), then tries the fallback model
+// Stop starting new attempts after this long, so the request ends with a clear message before the
+// hosting platform cuts it off (Vercel's limit is set in vercel.json; an analysis call can take a minute)
+const RETRY_BUDGET_MS = Number(process.env.GEMINI_RETRY_BUDGET_MS) || 150_000;
+
+// Retries temporary failures with growing pauses, then tries the fallback model. With a fallback set,
+// the main model gets one quick retry before switching instead of the full set.
 async function withGeminiRetry<T>(run: (model: string) => Promise<T>): Promise<T> {
-  const delays = [2000, 4000, 8000];
   const models = FALLBACK_MODEL && FALLBACK_MODEL !== MODEL ? [MODEL, FALLBACK_MODEL] : [MODEL];
+  const started = Date.now();
   let lastError: unknown;
   for (const model of models) {
+    const delays = model === MODEL && models.length > 1 ? [2000] : [2000, 4000, 8000];
     for (let attempt = 0; attempt <= delays.length; attempt++) {
+      if (attempt > 0 || model !== models[0]) {
+        if (Date.now() - started > RETRY_BUDGET_MS) throw lastError;
+      }
       try {
         return await run(model);
       } catch (err) {
