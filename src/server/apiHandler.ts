@@ -16,7 +16,12 @@ function isTemporaryGeminiError(err: any): boolean {
   );
 }
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+function isQuotaError(err: any): boolean {
+  const status = Number(err?.status ?? err?.code ?? err?.error?.code);
+  return status === 429 || /\b429\b|RESOURCE_EXHAUSTED|exceeded your current quota/i.test(String(err?.message || ''));
+}
+
+const sleep =(ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // The whole request must finish before the hosting platform cuts it off (Vercel: maxDuration 300 s in
 // vercel.json), so Gemini work gets this much time in total, leaving room to send the reply
@@ -66,6 +71,11 @@ async function withGeminiRetry<T>(
           throw lastError;
         }
         lastError = err;
+        // Out of quota on the main model: retrying won't help, so go straight to the fallback
+        if (model === MODEL && models.length > 1 && isQuotaError(err)) {
+          console.warn(`Gemini (${model}) is out of quota; trying ${FALLBACK_MODEL}`);
+          break;
+        }
         if (!isTemporaryGeminiError(err)) throw err;
         if (attempt < delays.length) {
           const wait = delays[attempt] + Math.round(Math.random() * 500);
