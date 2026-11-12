@@ -60,6 +60,11 @@ async function withGeminiRetry<T>(
       try {
         return await withTimeout(run(model), Math.min(ATTEMPT_TIMEOUT_MS, remaining));
       } catch (err) {
+        if (model !== MODEL && !isTemporaryGeminiError(err)) {
+          // A misconfigured fallback (wrong name, retired model) must not hide the real "busy" error
+          console.error(`Fallback model ${model} cannot be used; check GEMINI_FALLBACK_MODEL:`, err);
+          throw lastError;
+        }
         lastError = err;
         if (!isTemporaryGeminiError(err)) throw err;
         if (attempt < delays.length) {
