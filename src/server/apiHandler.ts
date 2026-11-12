@@ -18,24 +18,47 @@ function isTemporaryGeminiError(err: any): boolean {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Stop starting new attempts after this long, so the request ends with a clear message before the
-// hosting platform cuts it off (Vercel's limit is set in vercel.json; an analysis call can take a minute)
-const RETRY_BUDGET_MS = Number(process.env.GEMINI_RETRY_BUDGET_MS) || 150_000;
+// The whole request must finish before the hosting platform cuts it off (Vercel: maxDuration 300 s in
+// vercel.json), so Gemini work gets this much time in total, leaving room to send the reply
+const REQUEST_BUDGET_MS = Number(process.env.GEMINI_RETRY_BUDGET_MS) || 270_000;
+// A single Gemini call that has not answered after this long is treated as busy and retried/switched
+const ATTEMPT_TIMEOUT_MS = 120_000;
+// Don't start an attempt with less time than this left; it would only be cut off
+const MIN_ATTEMPT_MS = 20_000;
 
-// Retries temporary failures with growing pauses, then tries the fallback model. With a fallback set,
-// the main model gets one quick retry before switching instead of the full set.
-async function withGeminiRetry<T>(run: (model: string) => Promise<T>): Promise<T> {
+class GeminiTimeoutError extends Error {
+  status = 504;
+  constructor() {
+    super('DEADLINE_EXCEEDED: Gemini did not answer in time');
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new GeminiTimeoutError()), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+// Retries temporary failures (including calls that hang) with growing pauses, then tries the fallback
+// model. With a fallback set, the main model gets one quick retry before switching. Everything stays
+// within `deadline` (a Date.now() timestamp), so the request ends with a clear message instead of a 504.
+async function withGeminiRetry<T>(
+  run: (model: string) => Promise<T>,
+  deadline = Date.now() + REQUEST_BUDGET_MS
+): Promise<T> {
   const models = FALLBACK_MODEL && FALLBACK_MODEL !== MODEL ? [MODEL, FALLBACK_MODEL] : [MODEL];
-  const started = Date.now();
-  let lastError: unknown;
+  let lastError: unknown = new GeminiTimeoutError();
   for (const model of models) {
     const delays = model === MODEL && models.length > 1 ? [2000] : [2000, 4000, 8000];
     for (let attempt = 0; attempt <= delays.length; attempt++) {
-      if (attempt > 0 || model !== models[0]) {
-        if (Date.now() - started > RETRY_BUDGET_MS) throw lastError;
-      }
+      const remaining = deadline - Date.now();
+      if (remaining < MIN_ATTEMPT_MS) throw lastError;
       try {
-        return await run(model);
+        return await withTimeout(run(model), Math.min(ATTEMPT_TIMEOUT_MS, remaining));
       } catch (err) {
         lastError = err;
         if (!isTemporaryGeminiError(err)) throw err;
@@ -200,6 +223,8 @@ export async function handleApiRequest(req: IncomingMessage, res: ServerResponse
 
   // Process Audio
   if (url === '/api/process-audio' && req.method === 'POST') {
+    // One time budget for the whole analysis (upload, retries, schema fallback)
+    const deadline = Date.now() + REQUEST_BUDGET_MS;
     try {
       const body = await readJsonBody(req);
       const { audioBase64, mimeType, filename, languagePreference } = body;
@@ -328,9 +353,9 @@ Analyze this audio file thoroughly and return the complete JSON object.`;
             temperature: 0.2,
             ...(enforceSchema ? { responseSchema: ANALYSIS_SCHEMA } : {}),
           },
-        })
+        }),
+        deadline
         );
-
       let response;
       try {
         try {
