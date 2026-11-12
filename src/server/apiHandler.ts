@@ -2,7 +2,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { ANALYSIS_SCHEMA } from './analysisSchema.js';
 
-const MODEL = 'Gemini 2.5 Flash';
+const MODEL = 'gemini-3.8-flash';
 // Optional second model to try when the main one stays overloaded, e.g. GEMINI_FALLBACK_MODEL=gemini-2.5-flash
 const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL?.trim() || '';
 
@@ -388,6 +388,7 @@ Analyze this audio file thoroughly and return the complete JSON object.`;
         }
       }
 
+      console.log(`Analysis answered by ${response.modelVersion || 'unknown model'}`);
       const responseText = response.text;
       if (!responseText) {
         throw new Error('Gemini model returned an empty response. Audio may be silent or corrupted.');
